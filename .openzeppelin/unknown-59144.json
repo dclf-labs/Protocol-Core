@@ -1,0 +1,373 @@
+{
+  "manifestVersion": "3.2",
+  "proxies": [
+    {
+      "address": "0xdA67B4284609d2d48e5d10cfAc411572727dc1eD",
+      "txHash": "0xe09cc4667e827fd51e17b4497623691c4010620812e544d70eb11c8df60a1291",
+      "kind": "transparent"
+    },
+    {
+      "address": "0x6086d52F28c7b7481d8aE0FAdD4349cbB608C2Bd",
+      "txHash": "0x45473421b9b4dfa13957b6660e95b10ce6bdd367af302f803676a9671c9fe25a",
+      "kind": "transparent"
+    }
+  ],
+  "impls": {
+    "46fdf57d4809f093e25076331a795ec29049a041665e9ebfcf36513d4b479056": {
+      "address": "0x0aDa1cb43aC67FFfA2773B169920bfAB4c6391B7",
+      "txHash": "0x1f36ce74d8c766ad21606ac65ba7b3eeadf0b74bfa1cdbe63c531d210bae0804",
+      "layout": {
+        "solcVersion": "0.8.28",
+        "storage": [
+          {
+            "label": "blacklist",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_address,t_bool)",
+            "contract": "USNOFTHyperlane",
+            "src": "contracts/USNOFTHyperlane.sol:15"
+          },
+          {
+            "label": "mailbox",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_contract(IMailbox)205",
+            "contract": "USNOFTHyperlane",
+            "src": "contracts/USNOFTHyperlane.sol:18"
+          },
+          {
+            "label": "_interchainSecurityModule",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_contract(IInterchainSecurityModule)31",
+            "contract": "USNOFTHyperlane",
+            "src": "contracts/USNOFTHyperlane.sol:19"
+          },
+          {
+            "label": "remoteTokens",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_mapping(t_uint32,t_bytes32)",
+            "contract": "USNOFTHyperlane",
+            "src": "contracts/USNOFTHyperlane.sol:20"
+          },
+          {
+            "label": "hyperlaneEnabled",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_bool",
+            "contract": "USNOFTHyperlane",
+            "src": "contracts/USNOFTHyperlane.sol:21"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_contract(IInterchainSecurityModule)31": {
+            "label": "contract IInterchainSecurityModule",
+            "numberOfBytes": "20"
+          },
+          "t_contract(IMailbox)205": {
+            "label": "contract IMailbox",
+            "numberOfBytes": "20"
+          },
+          "t_mapping(t_address,t_bool)": {
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_uint32,t_bytes32)": {
+            "label": "mapping(uint32 => bytes32)",
+            "numberOfBytes": "32"
+          },
+          "t_uint32": {
+            "label": "uint32",
+            "numberOfBytes": "4"
+          },
+          "t_mapping(t_bytes32,t_struct(RoleData)1620_storage)": {
+            "label": "mapping(bytes32 => struct AccessControlUpgradeable.RoleData)"
+          },
+          "t_struct(RoleData)1620_storage": {
+            "label": "struct AccessControlUpgradeable.RoleData",
+            "members": [
+              {
+                "label": "hasRole",
+                "type": "t_mapping(t_address,t_bool)"
+              },
+              {
+                "label": "adminRole",
+                "type": "t_bytes32"
+              }
+            ]
+          },
+          "t_mapping(t_address,t_uint256)": {
+            "label": "mapping(address => uint256)"
+          },
+          "t_uint256": {
+            "label": "uint256"
+          },
+          "t_mapping(t_address,t_mapping(t_address,t_uint256))": {
+            "label": "mapping(address => mapping(address => uint256))"
+          },
+          "t_string_storage": {
+            "label": "string"
+          },
+          "t_uint64": {
+            "label": "uint64"
+          }
+        },
+        "namespaces": {
+          "erc7201:openzeppelin.storage.AccessControl": [
+            {
+              "contract": "AccessControlUpgradeable",
+              "label": "_roles",
+              "type": "t_mapping(t_bytes32,t_struct(RoleData)1620_storage)",
+              "src": "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol:61"
+            }
+          ],
+          "erc7201:openzeppelin.storage.ERC20": [
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_balances",
+              "type": "t_mapping(t_address,t_uint256)",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:33"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_allowances",
+              "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:35"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_totalSupply",
+              "type": "t_uint256",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:37"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_name",
+              "type": "t_string_storage",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:39"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_symbol",
+              "type": "t_string_storage",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:40"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Ownable": [
+            {
+              "contract": "OwnableUpgradeable",
+              "label": "_owner",
+              "type": "t_address",
+              "src": "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol:24"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:69"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:73"
+            }
+          ]
+        }
+      }
+    },
+    "59d236899dfc16cfec08a68eada91f93099a88d3e86bbe24a158ee53440723cb": {
+      "address": "0x34a2798D47b238A7CbA9D87D49618DEE6C4D999F",
+      "txHash": "0xe44a2ca79831b5f0791a119802669dc17ef0d3759ccea75629cbafef08f4c8ed",
+      "layout": {
+        "solcVersion": "0.8.28",
+        "storage": [
+          {
+            "label": "blacklist",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_mapping(t_address,t_bool)",
+            "contract": "StakedUSNOFTHyperlane",
+            "src": "contracts/StakedUSNOFTHyperlane.sol:16"
+          },
+          {
+            "label": "mailbox",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_contract(IMailbox)205",
+            "contract": "StakedUSNOFTHyperlane",
+            "src": "contracts/StakedUSNOFTHyperlane.sol:19"
+          },
+          {
+            "label": "_interchainSecurityModule",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_contract(IInterchainSecurityModule)31",
+            "contract": "StakedUSNOFTHyperlane",
+            "src": "contracts/StakedUSNOFTHyperlane.sol:20"
+          },
+          {
+            "label": "remoteTokens",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_mapping(t_uint32,t_bytes32)",
+            "contract": "StakedUSNOFTHyperlane",
+            "src": "contracts/StakedUSNOFTHyperlane.sol:21"
+          },
+          {
+            "label": "hyperlaneEnabled",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_bool",
+            "contract": "StakedUSNOFTHyperlane",
+            "src": "contracts/StakedUSNOFTHyperlane.sol:22"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_contract(IInterchainSecurityModule)31": {
+            "label": "contract IInterchainSecurityModule",
+            "numberOfBytes": "20"
+          },
+          "t_contract(IMailbox)205": {
+            "label": "contract IMailbox",
+            "numberOfBytes": "20"
+          },
+          "t_mapping(t_address,t_bool)": {
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_uint32,t_bytes32)": {
+            "label": "mapping(uint32 => bytes32)",
+            "numberOfBytes": "32"
+          },
+          "t_uint32": {
+            "label": "uint32",
+            "numberOfBytes": "4"
+          },
+          "t_mapping(t_bytes32,t_struct(RoleData)1620_storage)": {
+            "label": "mapping(bytes32 => struct AccessControlUpgradeable.RoleData)"
+          },
+          "t_struct(RoleData)1620_storage": {
+            "label": "struct AccessControlUpgradeable.RoleData",
+            "members": [
+              {
+                "label": "hasRole",
+                "type": "t_mapping(t_address,t_bool)"
+              },
+              {
+                "label": "adminRole",
+                "type": "t_bytes32"
+              }
+            ]
+          },
+          "t_mapping(t_address,t_uint256)": {
+            "label": "mapping(address => uint256)"
+          },
+          "t_uint256": {
+            "label": "uint256"
+          },
+          "t_mapping(t_address,t_mapping(t_address,t_uint256))": {
+            "label": "mapping(address => mapping(address => uint256))"
+          },
+          "t_string_storage": {
+            "label": "string"
+          },
+          "t_uint64": {
+            "label": "uint64"
+          }
+        },
+        "namespaces": {
+          "erc7201:openzeppelin.storage.AccessControl": [
+            {
+              "contract": "AccessControlUpgradeable",
+              "label": "_roles",
+              "type": "t_mapping(t_bytes32,t_struct(RoleData)1620_storage)",
+              "src": "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol:61"
+            }
+          ],
+          "erc7201:openzeppelin.storage.ERC20": [
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_balances",
+              "type": "t_mapping(t_address,t_uint256)",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:33"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_allowances",
+              "type": "t_mapping(t_address,t_mapping(t_address,t_uint256))",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:35"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_totalSupply",
+              "type": "t_uint256",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:37"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_name",
+              "type": "t_string_storage",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:39"
+            },
+            {
+              "contract": "ERC20Upgradeable",
+              "label": "_symbol",
+              "type": "t_string_storage",
+              "src": "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol:40"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Ownable": [
+            {
+              "contract": "OwnableUpgradeable",
+              "label": "_owner",
+              "type": "t_address",
+              "src": "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol:24"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:69"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:73"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
