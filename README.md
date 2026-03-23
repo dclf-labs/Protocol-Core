@@ -1,224 +1,294 @@
 # Noon Core Contracts
 
-This repository contains the core smart contracts for the Noon protocol, focusing on the USN stablecoin system and its associated handlers. Below is a detailed overview of the main contracts, their functions, and use cases.
+Core smart contracts for the [Noon protocol](https://docs.noon.capital) — a stablecoin system built around USN, a USD-pegged stablecoin with yield generation through DeFi lending, yield trading, private credit, and real-world assets.
 
-## Key Contracts
+## Overview
 
-### 1. USN.sol
+The protocol consists of:
 
-USN is the primary stablecoin of the Noon ecosystem, designed to maintain a stable value pegged to the US Dollar.
+- **USN** — ERC20 stablecoin with cross-chain support (LayerZero OFT + Hyperlane)
+- **sUSN** — Staked USN via an ERC4626 vault, earning yield through rebases
+- **MinterHandlerV2** — Signature-based and direct minting with Chainlink oracle pricing
+- **RedeemHandler** — Signature-based USN redemption for collateral
+- **WithdrawalHandler** — Queued withdrawal system with timelock for the staking vault
+- **Cross-chain contracts** — USNOFTHyperlane, StakedUSNOFTHyperlane for multi-chain bridging
 
-#### Key Features:
+USN can be accessed permissionlessly via DEXes (Uniswap, Curve, Syncswap, Ekubo), while minting and redemption require whitelisting.
 
-- ERC20 compliant stablecoin
-- Minting and burning capabilities
-- Blacklisting functionality
-- Blocks transfers if blacklisted
-- Role-based access control
+## Contracts
 
-#### Key Functions:
+### USN.sol
 
-- `mint(address to, uint256 amount)`: Mints new USN tokens (restricted to authorized minters).
-- `burn(uint256 amount)`: Burns USN tokens from the caller's balance.
-- `burnFrom(address account, uint256 amount)`: Burns USN tokens from a specified account.
-- `transfer(address recipient, uint256 amount)`: Transfers USN tokens to a specified address.
-- `approve(address spender, uint256 amount)`: Approves a spender to use a certain amount of USN tokens.
-- `transferFrom(address sender, address recipient, uint256 amount)`: Transfers USN tokens on behalf of another address.
-- `setMinter(address minter, bool status)`: Sets or revokes minter privileges (admin only).
-- `blacklist(address account)` and `unblacklist(address account)`: Adds or removes an address from the blacklist (admin only).
+ERC20 stablecoin implementing LayerZero's OFT (Omnichain Fungible Token) standard with ERC20Permit and ERC20Burnable.
 
-#### Use Cases:
+**Features:**
+- Minting and burning with admin control
+- Blacklisting and whitelisting
+- Permissionless mode toggle — once enabled, removes whitelist requirement for transfers
+- Cross-chain transfers via LayerZero
 
-- **Users**: Hold, transfer, and use USN within the ecosystem.
-- **Traders**: Utilize USN for trading pairs and as a stable store of value.
-- **DeFi Protocols**: Integrate USN as a stablecoin option in various DeFi applications.
-- **Treasury**: Manage USN supply through authorized minting and burning.
-- **Compliance Team**: Manage blacklisted addresses for regulatory compliance.
+**Key Functions:**
+- `mint(address to, uint256 amount)` — Mint USN (admin only)
+- `blacklistAccount(address)` / `unblacklistAccount(address)` — Manage blacklist (owner only)
+- `addToWhitelist(address)` / `removeFromWhitelist(address)` — Manage whitelist (owner only)
+- `enablePermissionless()` — Remove whitelist restrictions permanently (owner only)
 
-### 2. MinterHandler.sol
+### MinterHandlerV2.sol
 
-Manages the minting process for USN, ensuring proper collateralization and adherence to protocol rules.
+Manages USN minting through two mechanisms: EIP712 signature-based orders and direct minting with Chainlink oracle pricing.
 
-#### Key Features:
+**Roles:**
+- `MINTER_ROLE` — Execute mint orders and rebases
+- `DEFAULT_ADMIN_ROLE` — Configuration and parameter management
 
-- EIP712 compliant order signing
-- Whitelisting for users and collateral
-- Custodial wallet management for treasury
-- Role-based access control
-- Reentrancy/Signature reuse protection based on nonce
-- Mint limit per block to control minting flow
+**Order Structure:**
+```solidity
+struct Order {
+    string message;
+    address user;
+    address collateralAddress;
+    uint256 collateralAmount;
+    uint256 usnAmount;
+    uint256 expiry;
+    uint256 nonce;
+}
+```
 
-#### Mint Order Structure:
+**Key Functions:**
+- `mint(Order calldata order, bytes calldata signature)` — Mint USN from a signed order (MINTER_ROLE)
+- `directMint(address collateralAddress, uint256 collateralAmount, uint256 minUsnAmount)` — Mint using oracle price
+- `previewDirectMint(address collateralAddress, uint256 collateralAmount)` — Preview direct mint output
+- `mintAndRebase(uint256 amount)` — Mint and deposit into staking vault (MINTER_ROLE)
+- `setCustodialWallet(address)` — Set collateral destination (admin)
+- `setSUSNVault(address)` — Set staking vault for rebases (admin)
+- `setPriceFeed(address collateral, address priceFeed)` — Configure Chainlink oracle (admin)
+- `setMintLimitPerBlock(uint256)` — Rate limit per block (default: 1M USN)
+- `setDirectMintLimitPerDay(uint256)` — Daily limit for direct mints (default: 100k USN)
+- `setRebaseLimit(uint256)` — Max rebase amount per call (default: 30k USN)
+- `setPriceThreshold(uint256)` — Oracle deviation tolerance in bps (default: 100 = 1%)
+- `setOracleStalenessThreshold(uint256)` — Max oracle age (default: 1 hour)
 
-The `Order` struct used for minting USN tokens contains the following fields:
+**Direct Mint Pricing Logic:**
+- Within ±1% of $1.00: 1:1 mint ratio
+- Below lower bound: mint at actual oracle price
+- Above upper bound: capped at 1:1
 
-- `user`: Address of the user minting USN
-- `collateralAmount`: Amount of collateral being provided
-- `usnAmount`: Amount of USN to be minted
-- `nonce`: Unique identifier to prevent replay attacks
-- `expiry`: Timestamp after which the order becomes invalid
-- `collateralAddress`: Address of the collateral token being used
+**Security:**
+- ReentrancyGuard on all mint paths
+- EIP712 off-chain signing with nonce-based replay prevention
+- Per-block and per-day rate limiting
+- Chainlink oracle staleness checks
+- User and collateral whitelisting
 
-This order is signed off-chain using EIP712 and verified on-chain during the minting process.
+### RedeemHandler.sol
 
-#### Key Functions:
+Manages USN redemption — users exchange USN for underlying collateral via signed orders.
 
-- `mint(Order calldata order, bytes calldata signature)`: Mints USN tokens based on the provided order and signature (restricted to MINTER_ROLE).
-- `setCustodialWallet(address _custodialWallet)`: Sets the custodial wallet address (admin only).
-- `addWhitelistedUser(address user)`: Adds a user to the whitelist (admin only).
-- `removeWhitelistedUser(address user)`: Removes a user from the whitelist (admin only).
-- `addWhitelistedCollateral(address collateral)`: Adds a collateral token to the whitelist (admin only).
-- `removeWhitelistedCollateral(address collateral)`: Removes a collateral token from the whitelist (admin only).
-- `hashOrder(Order calldata order)`: Computes the hash of an order.
-- `encodeOrder(Order calldata order)`: Encodes an order for hashing.
-- `setMintLimitPerBlock(uint256 _mintLimitPerBlock)`: Sets the mint limit per block (admin only).
+**Roles:**
+- `BURNER_ROLE` — Execute redemptions
+- `REDEEM_MANAGER_ROLE` — Manage redeemable collateral list
+- `DEFAULT_ADMIN_ROLE` — Configuration and rescue
 
-#### Use Cases:
+**Order Structure:**
+```solidity
+struct RedeemOrder {
+    string message;
+    address user;
+    address collateralAddress;
+    uint256 collateralAmount;
+    uint256 usnAmount;
+    uint256 expiry;
+    uint256 nonce;
+}
+```
 
-- **Whitelisted Users**: Submit signed orders to mint USN tokens.
-- **Collateral Providers**: Supply whitelisted assets as collateral for minting USN.
-- **MINTER_ROLE**: Execute minting operations based on valid orders and signatures.
-- **Protocol Admins**: Manage whitelisted users, collateral types, and the custodial wallet.
-- **Integrators**: Utilize the order hashing and encoding functions for off-chain signature generation.
+**Key Functions:**
+- `redeem(RedeemOrder calldata order, bytes calldata signature)` — Redeem USN for collateral (BURNER_ROLE)
+- `redeemWithPermit(...)` — Redeem using EIP-2612 permit for gasless approvals
+- `addRedeemableCollateral(address)` / `removeRedeemableCollateral(address)` — Manage collateral list
+- `setRedeemLimitPerBlock(uint256)` — Rate limit per block (default: 1M USN)
+- `rescueERC20(address token, uint256 amount)` — Recover accidentally sent tokens (admin)
 
-#### Security Features:
+**Security:**
+- EIP712 signing with nonce-based replay prevention
+- Per-block rate limiting
+- SafeERC20 for secure transfers
+- Collateral and signature validation
 
-- Implements ReentrancyGuard to prevent reentrancy attacks.
-- Uses AccessControl for role-based permissions.
-- Employs EIP712 for secure, off-chain order signing.
-- Validates user and collateral whitelisting, signature expiry, and nonce usage.
-- Enforces a mint limit per block to prevent large sudden inflows.
+### StakingVault.sol
 
-### 3. RedeemHandler.sol
+ERC4626-compliant tokenized vault where users stake USN and receive sUSN shares. Yield is distributed through rebases that increase share value.
 
-Manages the redemption process for USN, allowing users to exchange USN for underlying collateral.
+**Roles:**
+- `REBASE_MANAGER_ROLE` — Add assets via rebase
+- `BLACKLIST_MANAGER_ROLE` — Manage blacklist
+- `DEFAULT_ADMIN_ROLE` — Configuration
 
-#### Key Features:
+**Key Functions:**
+- `rebase(uint256 amount)` — Add assets to vault, increasing share value (REBASE_MANAGER_ROLE)
+- `rebaseWithPermit(...)` — Rebase using ERC20Permit
+- `createWithdrawalDemand(uint256 shares, bool force)` — Initiate withdrawal with timelock
+- `withdraw(...)` / `redeem(...)` — Execute withdrawal after timelock period
+- `depositWithPermit(...)` — Deposit using ERC20Permit
+- `depositWithSlippageCheck(...)` / `redeemWithSlippageCheck(...)` — Operations with slippage protection
+- `setWithdrawPeriod(uint256)` — Configure timelock duration (default: 1 day)
+- `blacklistAccount(address)` / `unblacklistAccount(address)` — Manage blacklist
+- `rescueToken(IERC20 token, address to, uint256 amount)` — Recover accidentally sent tokens
 
-- EIP712 compliant order signing
-- Redeemable collateral management
-- Role-based access control
-- Secure token transfers
-- Redeem limit per block to control redemption flow
+**Security:**
+- ReentrancyGuard on rebase
+- Two-step withdrawal with configurable timelock
+- Blacklisting for compliance
+- Cannot rescue vault token or underlying asset
 
-#### Redeem Order Structure:
+### WithdrawalHandler.sol
 
-The `RedeemOrder` struct used for redeeming USN tokens contains the following fields:
+Standalone withdrawal queuing contract used by the staking vault for managing withdrawal requests with timelocks.
 
-- `user`: Address of the user redeeming USN
-- `usnAmount`: Amount of USN to be redeemed
-- `collateralAmount`: Amount of collateral to be received
-- `collateralAddress`: Address of the collateral token to receive
-- `nonce`: Unique identifier to prevent replay attacks
-- `expiry`: Timestamp after which the order becomes invalid
+**Roles:**
+- `STAKING_VAULT_ROLE` — Create withdrawal requests
+- `DEFAULT_ADMIN_ROLE` — Configuration
 
-Similar to the mint order, this redeem order is signed off-chain using EIP712 and verified on-chain during the redemption process.
+**Key Functions:**
+- `createWithdrawalRequest(address user, uint256 amount)` — Queue a withdrawal (STAKING_VAULT_ROLE)
+- `claimWithdrawal(uint256 requestId)` — Claim after timelock expires
+- `setWithdrawPeriod(uint256)` — Configure timelock duration
+- `getWithdrawalRequest(address user, uint256 requestId)` — Query request status
 
-#### Key Functions:
+### Cross-Chain Contracts
 
-- `redeem(RedeemOrder calldata order, bytes calldata signature)`: Redeems USN for the specified collateral token based on a signed order (restricted to BURNER_ROLE). Verifies the order details, signature, and allowance before burning USN and transferring collateral.
-- `redeemWithPermit(RedeemOrder calldata order, bytes calldata signature, uint8 v, bytes32 r, bytes32 s)`: Redeems USN using EIP-2612 permit for gasless approvals.
-- `addRedeemableCollateral(address collateral)`: Adds a new redeemable collateral token (restricted to REDEEM_MANAGER_ROLE).
-- `removeRedeemableCollateral(address collateral)`: Removes a redeemable collateral token (restricted to REDEEM_MANAGER_ROLE).
-- `hashOrder(RedeemOrder calldata order)`: Computes the EIP712-compliant hash of a redeem order.
-- `encodeOrder(RedeemOrder calldata order)`: Encodes a redeem order for hashing, following the REDEEM_TYPEHASH structure.
-- `setRedeemLimitPerBlock(uint256 newLimit)`: Sets a new redeem limit per block (admin only).
+#### USNOFTHyperlane.sol
 
-#### Use Cases:
+Upgradeable USN token with both LayerZero OFT and Hyperlane cross-chain messaging support.
 
-- **USN Holders**: Redeem USN for underlying collateral by submitting signed orders.
-- **BURNER_ROLE**: Execute redemption operations based on valid orders and signatures.
-- **REDEEM_MANAGER_ROLE**: Manage the list of redeemable collateral tokens.
-- **Integrators**: Utilize the order hashing and encoding functions for off-chain signature generation.
-- **Admin**: Manage redeem limits to control redemption flow.
+- `sendTokensViaHyperlane(uint32 destinationDomain, bytes32 recipient, uint256 amount)` — Bridge USN cross-chain
+- `configureHyperlane(address mailbox)` — Set Hyperlane mailbox
+- `registerHyperlaneRemoteToken(uint32 domain, bytes32 remoteToken)` — Register remote chain token
+- Blacklist management via `BLACKLIST_MANAGER_ROLE`
 
-#### Security Features:
+#### StakedUSNOFTHyperlane.sol
 
-- Implements AccessControl for role-based permissions (BURNER_ROLE, REDEEM_MANAGER_ROLE).
-- Employs EIP712 for secure, off-chain order signing and verification.
-- Validates redeemable collaterals, signature expiry, and allowances.
-- Uses SafeERC20 for secure token transfers.
-- Implements checks for zero addresses, zero amounts, and valid collateral.
-- Prevents removal of USN as a redeemable collateral.
-- Enforces a redeem limit per block to prevent large sudden outflows.
+Same architecture as USNOFTHyperlane but for the sUSN staked token.
 
-#### Additional Notes:
+#### StakingVaultOFTUpgradeable.sol
 
-- The contract uses an immutable DOMAIN_SEPARATOR for EIP712 compliance, computed at construction.
-- The contract inherits from AccessControl and EIP712, providing a robust foundation for role management and typed data signing.
-- The redeem functions include comprehensive checks to ensure the validity and security of each redemption operation.
-- The redeemWithPermit function allows for gasless approvals, improving user experience.
+Upgradeable ERC4626 vault combined with LayerZero OFT for cross-chain sUSN transfers.
 
-Both MinterHandler and RedeemHandler use EIP712 for secure, off-chain order signing. The main difference between the two order types is their purpose:
+## Deployed Contracts
 
-- Mint orders are used to create new USN tokens by providing collateral.
-- Redeem orders are used to exchange USN tokens back into the underlying collateral.
+### Ethereum Mainnet
 
-The use of signed orders allows for gasless approvals and enhanced security in both minting and redemption processes.
+| Contract | Proxy | Implementation |
+| --- | --- | --- |
+| StakingVault | `0xE24a3DC889621612422A64E6388927901608B91D` | `0x78FC48b3bb59d8a1F29d4ff8c78Bba64E9374F97` |
 
-## StakingVault
+### Celo
 
-The StakingVault contract is an advanced ERC4626-compliant tokenized vault that allows users to stake their assets and earn rewards. It incorporates several key features for enhanced security, flexibility, and control:
+| Contract | Proxy | Implementation |
+| --- | --- | --- |
+| USN (OFT) | `0xdA67B4284609d2d48e5d10cfAc411572727dc1eD` | `0x0aDa1cb43aC67FFfA2773B169920bfAB4c6391B7` |
+| sUSN (OFT) | `0x6086d52F28c7b7481d8aE0FAdD4349cbB608C2Bd` | `0x34a2798D47b238A7CbA9D87D49618DEE6C4D999F` |
 
-### Key Features:
+### Linea
 
-1. **ERC4626 Compliance**: Implements the ERC4626 tokenized vault standard for seamless integration with other DeFi protocols.
+| Contract | Proxy | Implementation |
+| --- | --- | --- |
+| USN (Hyperlane) | `0xdA67B4284609d2d48e5d10cfAc411572727dc1eD` | `0x0aDa1cb43aC67FFfA2773B169920bfAB4c6391B7` |
+| sUSN (Hyperlane) | `0x6086d52F28c7b7481d8aE0FAdD4349cbB608C2Bd` | `0x34a2798D47b238A7CbA9D87D49618DEE6C4D999F` |
 
-2. **Role-Based Access Control**: Utilizes OpenZeppelin's AccessControl for managing different roles within the system.
+### Morph
 
-3. **Rebase Mechanism**: Allows authorized managers to add assets to the vault, effectively increasing the value of each share.
+| Contract | Proxy | Implementation |
+| --- | --- | --- |
+| USN (Hyperlane) | `0xdA67B4284609d2d48e5d10cfAc411572727dc1eD` | `0x0aDa1cb43aC67FFfA2773B169920bfAB4c6391B7` |
+| sUSN (Hyperlane) | `0x6086d52F28c7b7481d8aE0FAdD4349cbB608C2Bd` | `0x34a2798D47b238A7CbA9D87D49618DEE6C4D999F` |
 
-4. **Withdrawal Period**: Implements a customizable withdrawal period to prevent sudden large outflows.
+### Flare
 
-5. **Blacklisting**: Allows designated managers to blacklist addresses, preventing them from transferring tokens.
+| Contract | Proxy | Implementation |
+| --- | --- | --- |
+| USN (OFT) | `0x6086d52F28c7b7481d8aE0FAdD4349cbB608C2Bd` | `0x34a2798D47b238A7CbA9D87D49618DEE6C4D999F` |
+| sUSN (OFT) | `0xF98AF70f2A5a9526248076Df6706Ac96BD1F8A41` | `0xf6f40baAFBCbB29855F4D9A29576B812E0B33fac` |
+| StakingVault (Hyperlane) | `0x07e4Fa82914c762b53679B720B60049FdA4Df8F6` | `0x002bcbC82a25676112990f519bcEF28612a83779` |
+| USN (Hyperlane) | `0x901cD8E4932F070Ee6ff959ad781bFAC223824EE` | `0xe8c8fB68753dD51DDB28C738959eA1ABE650cB2A` |
+| sUSN (Hyperlane) | `0xc568Af31FF7287824d6896F8EB7EcCe1aEDEb8eC` | `0x0618c719749417B882142ff1E6B8243D48563d01` |
 
-6. **Rescue Functionality**: Enables the admin to rescue any accidentally sent tokens, except for the vault token and underlying asset.
+## Development
 
-### Roles:
+### Prerequisites
 
-- **DEFAULT_ADMIN_ROLE**: Can set other roles and change critical parameters.
-- **REBASE_MANAGER_ROLE**: Can perform rebases to add assets to the vault.
-- **BLACKLIST_MANAGER_ROLE**: Can add or remove addresses from the blacklist.
+- Node.js >= 18
+- Yarn
 
-### Key Functions:
+### Setup
 
-- `createWithdrawalDemand`: Users must create a withdrawal demand before withdrawing.
-- `withdraw` and `redeem`: Override ERC4626 functions to enforce the withdrawal period and demand system.
-- `rebase`: Allows adding assets to the vault, increasing the value of each share.
-- `blacklistAccount` and `unblacklistAccount`: Manage the blacklist.
-- `rescueToken`: Allows the admin to recover accidentally sent tokens.
-- `setRebaseManager`: Grants the REBASE_MANAGER_ROLE to a specified address.
-- `setWithdrawPeriod`: Allows the admin to update the withdrawal period.
+```bash
+cp .env.example .env  # Configure RPC URLs and keys
+yarn install
+```
 
-### Security Features:
+### Build & Test
 
-- Implements ReentrancyGuard to prevent reentrancy attacks.
-- Uses SafeERC20 for secure token transfers.
-- Enforces a withdrawal period to prevent sudden large outflows.
-- Includes a blacklist feature to restrict malicious actors.
-- Checks for zero amounts and failed transfers in the rebase function.
-- Prevents rescuing of the vault token and underlying asset.
+```bash
+yarn compile              # Compile contracts
+yarn test                 # Run tests
+yarn test:coverage        # Generate coverage report
+yarn test:trace           # Run with call traces
+```
 
-### Contract Structure:
+### Deploy
 
-- Inherits from ERC4626, AccessControl, ReentrancyGuard, and IStakingVault.
-- Uses OpenZeppelin's implementation of ERC20Permit (through ERC4626).
-- Defines constants for role management (REBASE_MANAGER_ROLE, BLACKLIST_MANAGER_ROLE).
-- Implements a WithdrawalDemand struct to manage withdrawal requests.
-- Uses mappings for withdrawal demands and blacklist management.
+```bash
+./bin/deploy.sh <network> <contract-name>
 
-### Constructor:
+# Examples:
+./bin/deploy.sh mainnet USN
+./bin/deploy.sh celo MinterHandlerV2
+```
 
-- Initializes the contract with the underlying asset, name, and symbol.
-- Sets up initial roles and default withdrawal period.
+### Other Commands
 
-The StakingVault provides a secure and flexible solution for asset staking, with built-in protections and management capabilities to ensure the stability and security of the staked assets. It leverages OpenZeppelin's battle-tested contracts and follows best practices in smart contract development.
+```bash
+yarn size                 # Contract size report
+yarn lint                 # Lint Solidity and TypeScript
+yarn format               # Format all files
+yarn generate:docs        # Generate Solidity docs
+```
+
+### Configuration
+
+- **Solidity**: 0.8.28 with optimizer (200 runs)
+- **Framework**: Hardhat with TypeScript
+- **Proxies**: OpenZeppelin Transparent Proxy (upgradeable contracts)
+- **Cross-chain**: LayerZero V2 + Hyperlane
+- **Oracles**: Chainlink price feeds (for direct minting)
+
+### Supported Networks
+
+Ethereum, Celo, Linea, Flare, Morph, zkSync Era, Sophon, and various testnets (Sepolia, Goerli, etc.).
 
 ## Test Coverage
 
-| File                        | % Stmts | % Funcs | % Lines |
-| --------------------------- | ------- | ------- | ------- |
-| contracts/MinterHandler.sol | 96.43%  | 100.00% | 97.87%  |
-| contracts/RedeemHandler.sol | 97.62%  | 90.00%  | 96.43%  |
-| contracts/StakingVault.sol  | 100.00% | 100.00% | 100.00% |
-| contracts/USN.sol          | 100.00% | 100.00% | 100.00% |
+| File | % Stmts | % Funcs | % Lines |
+| --- | --- | --- | --- |
+| contracts/MinterHandler.sol | 96.43% | 100.00% | 97.87% |
+| contracts/RedeemHandler.sol | 97.62% | 90.00% | 96.43% |
+| contracts/StakingVault.sol | 100.00% | 100.00% | 100.00% |
+| contracts/USN.sol | 100.00% | 100.00% | 100.00% |
+
+## Security
+
+- EIP712 typed data signing for all mint/redeem operations
+- Nonce-based replay attack prevention
+- Per-block and per-day rate limiting
+- Chainlink oracle integration with staleness checks
+- Role-based access control (AccessControl)
+- ReentrancyGuard on state-changing operations
+- SafeERC20 for all token transfers
+- Blacklisting for regulatory compliance
+- Two-step withdrawal with configurable timelock
+- CI pipeline includes [Slither](https://github.com/crytic/slither) and [Mythril](https://github.com/Consensys/mythril) static analysis
+
+## License
+
+MIT

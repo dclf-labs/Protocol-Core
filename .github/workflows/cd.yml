@@ -3,7 +3,7 @@ name: cd
 on: [push, pull_request]
 
 env:
-  SOLC_VERSION: ${{ secrets.SOLC_VERSION }}
+  SOLC_VERSION: ${{ secrets.SOLC_VERSION || '0.8.28' }}
   SOLIDITY_OPTIMIZER: ${{ secrets.SOLIDITY_OPTIMIZER }}
 
 jobs:
