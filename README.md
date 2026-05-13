@@ -212,7 +212,7 @@ yarn test:trace           # Run with call traces
 
 # Examples:
 ./bin/deploy.sh mainnet USN
-./bin/deploy.sh celo MinterHandlerV2
+./bin/deploy.sh mainnet MinterHandlerV2
 ```
 
 ### Other Commands
@@ -234,7 +234,7 @@ yarn generate:docs        # Generate Solidity docs
 
 ### Supported Networks
 
-Ethereum, Celo, Linea, Flare, Morph, zkSync Era, Sophon, and various testnets (Sepolia, Goerli, etc.).
+Ethereum, zkSync Era, Sophon, Starknet, HyperEVM and various testnets (Sepolia, Goerli, etc.).
 
 ## Test Coverage
 
