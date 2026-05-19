@@ -60,14 +60,17 @@ contract StakingVaultOFTUpgradeable is
     // Constants
     bytes32 public constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
-    // Hard floor for stuck-message reconciliation timelock — cannot be bypassed by the multisig.
-    uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     // Hyperlane storage
     IMailbox public mailbox;
     IInterchainSecurityModule private _interchainSecurityModule;
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
+
+    // Hard floor for stuck-message reconciliation timelock — cannot be bypassed by the multisig.
+    // Declared here (after Hyperlane vars) so any future additions in this upgrade slot stay
+    // grouped at the end of the inheritance chain. `constant` itself takes no storage.
+    uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
