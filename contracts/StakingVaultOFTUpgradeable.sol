@@ -29,8 +29,6 @@ abstract contract StakingVaultStorageV1 {
         mapping(address => bool) blacklist;
         address withdrawalHandler;
         mapping(address => bool) whitelist;
-        // Appended for stuck LayerZero message reconciliation. Keep mapping at the
-        // end of the struct so existing field offsets are preserved across upgrades.
         mapping(bytes32 => StuckMessageRequest) stuckMessageRequests;
     }
 
@@ -67,9 +65,6 @@ contract StakingVaultOFTUpgradeable is
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
 
-    // Hard floor for stuck-message reconciliation timelock — cannot be bypassed by the multisig.
-    // Declared here (after Hyperlane vars) so any future additions in this upgrade slot stay
-    // grouped at the end of the inheritance chain. `constant` itself takes no storage.
     uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -385,16 +380,6 @@ contract StakingVaultOFTUpgradeable is
         return _interchainSecurityModule;
     }
 
-    // ---------------------------------------------------------------------
-    // Stuck message reconciliation (two-step timelocked recovery)
-    //
-    // When a LayerZero message is genuinely unrecoverable after all standard
-    // recovery paths have been exhausted, escrow on this chain holds locked
-    // shares with no matching live supply on the destination. These functions
-    // let the multisig reconcile the accounting after a 48h public review
-    // window. Recipient is the contract owner (treasury / manager) by design.
-    // ---------------------------------------------------------------------
-
     function requestHandleFixIssue(
         bytes32 guid,
         uint256 amount,
@@ -444,7 +429,6 @@ contract StakingVaultOFTUpgradeable is
 
         req.executed = true;
 
-        // Mirror of _credit: unlock escrowed shares to the recipient.
         _update(address(this), recipient, amount);
 
         emit StuckMessageReconciled(guid, recipient, amount);

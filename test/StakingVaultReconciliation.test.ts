@@ -8,7 +8,7 @@ import type {
 } from '../typechain-types';
 
 const CHAIN_ID_SRC = 1;
-const STUCK_MESSAGE_TIMELOCK = 48 * 60 * 60; // 48h, mirrors contract constant
+const STUCK_MESSAGE_TIMELOCK = 48 * 60 * 60;
 const GUID_A = ethers.keccak256(ethers.toUtf8Bytes('guid-a'));
 const GUID_B = ethers.keccak256(ethers.toUtf8Bytes('guid-b'));
 const REASON = 'LayerZero DVN outage from April 19';
@@ -39,7 +39,6 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
     const USNFactory = await ethers.getContractFactory('USN');
     USN = await USNFactory.deploy(await endpointMock.getAddress());
     await USN.enablePermissionless();
-    // Owner is the USN admin by default after deploy — mint to user for staking.
     await USN.setAdmin(await owner.getAddress());
     await USN.mint(await user.getAddress(), initialMint);
 
@@ -59,7 +58,6 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
       await proxy.getAddress()
     ) as StakingVaultOFTUpgradeable;
 
-    // User stakes — gets sUSN shares 1:1
     await USN.connect(user).approve(
       await StakingVault.getAddress(),
       ethers.MaxUint256
@@ -69,14 +67,14 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
       await user.getAddress()
     );
 
-    // Simulate a cross-chain send: the user's shares end up locked in the
-    // vault's own balance (this is exactly what _debit does during OFT send).
+    // Stand in for an OFT send: _debit locks the user's shares inside the
+    // vault. Transferring to address(this) reproduces that state without
+    // needing a full two-endpoint mock setup.
     await StakingVault.connect(user).transfer(
       await StakingVault.getAddress(),
       stakeAmount
     );
 
-    // Sanity: vault holds the locked shares, user holds none.
     expect(
       await StakingVault.balanceOf(await StakingVault.getAddress())
     ).to.equal(stakeAmount);
@@ -220,7 +218,6 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
 
     it('reverts if the 48h timelock has not elapsed', async function () {
       await StakingVault.requestHandleFixIssue(GUID_A, stakeAmount, REASON);
-      // Well short of the 48h floor.
       await increaseTime(STUCK_MESSAGE_TIMELOCK - 60);
       await expect(
         StakingVault.validateExecuteHandleIssue(GUID_A)
@@ -232,8 +229,6 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
 
     it('executes exactly at requestedAt + STUCK_MESSAGE_TIMELOCK', async function () {
       await StakingVault.requestHandleFixIssue(GUID_A, stakeAmount, REASON);
-      // The next mined block lands STUCK_MESSAGE_TIMELOCK seconds later, hitting
-      // the boundary exactly (block.timestamp == requestedAt + TIMELOCK).
       await increaseTime(STUCK_MESSAGE_TIMELOCK);
       await expect(StakingVault.validateExecuteHandleIssue(GUID_A)).to.not.be
         .reverted;
@@ -292,7 +287,6 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
       await StakingVault.requestHandleFixIssue(GUID_B, half, REASON);
       await increaseTime(STUCK_MESSAGE_TIMELOCK);
       await StakingVault.validateExecuteHandleIssue(GUID_A);
-      // Second guid still has its own pending request; not blocked by GUID_A.
       await expect(StakingVault.validateExecuteHandleIssue(GUID_B)).to.not.be
         .reverted;
       expect(await StakingVault.balanceOf(await owner.getAddress())).to.equal(
@@ -303,7 +297,7 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
     it('honors a fresh request that was re-queued after cancel', async function () {
       await StakingVault.requestHandleFixIssue(GUID_A, stakeAmount, REASON);
       await StakingVault.cancelHandleFixIssue(GUID_A);
-      // Re-request resets the timelock — old elapsed time should not count.
+      // Re-request must reset the timelock; pre-cancel elapsed time must not count.
       await StakingVault.requestHandleFixIssue(GUID_A, stakeAmount, REASON);
       await expect(
         StakingVault.validateExecuteHandleIssue(GUID_A)
