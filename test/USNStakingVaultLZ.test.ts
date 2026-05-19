@@ -346,6 +346,12 @@ describe('USNStakingVault', function () {
   });
 
   it('should not reflect rebase in withdrawals if made after withdrawal demand', async function () {
+    // Another user stakes so that totalSupply remains > 0 after user1 withdraws
+    await StakingVault.connect(user2).deposit(
+      stakeAmount,
+      await user2.getAddress()
+    );
+
     // Stake USN
     await StakingVault.connect(user1).deposit(
       stakeAmount,
@@ -392,11 +398,11 @@ describe('USNStakingVault', function () {
     expect(balanceSUsnBefore).to.be.greaterThan(balanceSUsnAfter);
     expect(balanceSUsnAfter).to.equal(0);
     expect(balanceUsnAfter).to.equal(balanceUsnBefore + assets);
-    // Check USN balance on staking vault
+    // Check USN balance on staking vault: user2's deposit + rebase rewards
     const vaultUsnBalance = await USN.balanceOf(
       await StakingVault.getAddress()
     );
-    expect(vaultUsnBalance).to.equal(rebaseAmount);
+    expect(vaultUsnBalance).to.equal(stakeAmount + rebaseAmount);
   });
 
   it('should enforce withdraw period', async function () {
@@ -651,6 +657,12 @@ describe('USNStakingVault', function () {
   });
 
   it('should allow rebaseWithPermit', async function () {
+    // Seed the vault with shares so rebase doesn't revert with NoSharesMinted
+    await StakingVault.connect(user1).deposit(
+      stakeAmount,
+      await user1.getAddress()
+    );
+
     const amount = ethers.parseUnits('1000', 18);
     const deadline = Math.floor(Date.now() / 1000) + 3600 * 100; // 100 hour from now
     const nonce = await USN.nonces(rebaseManager.address);
@@ -694,7 +706,7 @@ describe('USNStakingVault', function () {
       )
     )
       .to.emit(StakingVault, 'Rebase')
-      .withArgs(initialTotalSupply + amount);
+      .withArgs(amount);
 
     // Shouldn't change the total supply
     const finalTotalSupply = await StakingVault.totalSupply();
