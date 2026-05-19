@@ -19,10 +19,19 @@ import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
 abstract contract StakingVaultStorageV1 {
     bytes32 internal constant STAKING_VAULT_STORAGE_POSITION = keccak256("StakingVault.storage.location");
 
+    struct StuckMessageRequest {
+        uint256 amount;
+        uint256 requestedAt;
+        bool executed;
+    }
+
     struct StakingVaultStorage {
         mapping(address => bool) blacklist;
         address withdrawalHandler;
         mapping(address => bool) whitelist;
+        // Appended for stuck LayerZero message reconciliation. Keep mapping at the
+        // end of the struct so existing field offsets are preserved across upgrades.
+        mapping(bytes32 => StuckMessageRequest) stuckMessageRequests;
     }
 
     function getStakingVaultStorage() internal pure returns (StakingVaultStorage storage s) {
@@ -51,6 +60,8 @@ contract StakingVaultOFTUpgradeable is
     // Constants
     bytes32 public constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
+    // Hard floor for stuck-message reconciliation timelock — cannot be bypassed by the multisig.
+    uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     // Hyperlane storage
     IMailbox public mailbox;
@@ -369,5 +380,70 @@ contract StakingVaultOFTUpgradeable is
     // Required by IMessageRecipient interface
     function interchainSecurityModule() external view returns (IInterchainSecurityModule) {
         return _interchainSecurityModule;
+    }
+
+    // ---------------------------------------------------------------------
+    // Stuck message reconciliation (two-step timelocked recovery)
+    //
+    // When a LayerZero message is genuinely unrecoverable after all standard
+    // recovery paths have been exhausted, escrow on this chain holds locked
+    // shares with no matching live supply on the destination. These functions
+    // let the multisig reconcile the accounting after a 48h public review
+    // window. Recipient is the contract owner (treasury / manager) by design.
+    // ---------------------------------------------------------------------
+
+    function requestHandleFixIssue(
+        bytes32 guid,
+        uint256 amount,
+        string calldata reason
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (guid == bytes32(0)) revert InvalidGuid();
+        if (amount == 0) revert InvalidAmount();
+
+        StakingVaultStorage storage s = getStakingVaultStorage();
+        StuckMessageRequest storage req = s.stuckMessageRequests[guid];
+        if (req.executed) revert StuckMessageRequestAlreadyExecuted();
+        if (req.requestedAt != 0) revert StuckMessageRequestExists();
+
+        req.amount = amount;
+        req.requestedAt = block.timestamp;
+
+        emit StuckMessageReconciliationRequested(
+            guid,
+            owner(),
+            amount,
+            block.timestamp + STUCK_MESSAGE_TIMELOCK,
+            reason
+        );
+    }
+
+    function cancelHandleFixIssue(bytes32 guid) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        StakingVaultStorage storage s = getStakingVaultStorage();
+        StuckMessageRequest storage req = s.stuckMessageRequests[guid];
+        if (req.requestedAt == 0) revert StuckMessageRequestNotFound();
+        if (req.executed) revert StuckMessageRequestAlreadyExecuted();
+
+        delete s.stuckMessageRequests[guid];
+        emit StuckMessageReconciliationCancelled(guid);
+    }
+
+    function validateExecuteHandleIssue(bytes32 guid) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        StakingVaultStorage storage s = getStakingVaultStorage();
+        StuckMessageRequest storage req = s.stuckMessageRequests[guid];
+
+        if (req.requestedAt == 0) revert StuckMessageRequestNotFound();
+        if (req.executed) revert StuckMessageRequestAlreadyExecuted();
+        if (block.timestamp < req.requestedAt + STUCK_MESSAGE_TIMELOCK) revert StuckMessageTimelockNotElapsed();
+
+        uint256 amount = req.amount;
+        address recipient = owner();
+        if (balanceOf(address(this)) < amount) revert InsufficientLockedBalance();
+
+        req.executed = true;
+
+        // Mirror of _credit: unlock escrowed shares to the recipient.
+        _update(address(this), recipient, amount);
+
+        emit StuckMessageReconciled(guid, recipient, amount);
     }
 }

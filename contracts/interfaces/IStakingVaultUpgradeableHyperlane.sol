@@ -27,6 +27,15 @@ interface IStakingVaultUpgradeableHyperlane is IERC20 {
     event HyperlaneConfigured(address mailbox);
     event Whitelisted(address indexed account);
     event Unwhitelisted(address indexed account);
+    event StuckMessageReconciliationRequested(
+        bytes32 indexed guid,
+        address indexed recipient,
+        uint256 amount,
+        uint256 executableAt,
+        string reason
+    );
+    event StuckMessageReconciliationCancelled(bytes32 indexed guid);
+    event StuckMessageReconciled(bytes32 indexed guid, address indexed recipient, uint256 amount);
 
     // Custom errors
     error AssetTransferFailed();
@@ -50,6 +59,12 @@ interface IStakingVaultUpgradeableHyperlane is IERC20 {
     error InsufficientInterchainFee();
     error OnlyMailboxAllowed();
     error RemoteTokenNotRegistered();
+    error InvalidGuid();
+    error StuckMessageRequestExists();
+    error StuckMessageRequestNotFound();
+    error StuckMessageRequestAlreadyExecuted();
+    error StuckMessageTimelockNotElapsed();
+    error InsufficientLockedBalance();
 
     // Functions
     function rebase(uint256 _amount) external;
