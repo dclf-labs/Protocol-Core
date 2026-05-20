@@ -317,7 +317,7 @@ contract StakingVaultOFTUpgradeable is
 
     // Register a remote Hyperlane token contract
     function registerHyperlaneRemoteToken(uint32 _domain, bytes32 _remoteToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_remoteToken != bytes32(0), "Invalid remote token");
+        if (_remoteToken == bytes32(0)) revert InvalidRemoteToken();
         remoteTokens[_domain] = _remoteToken;
         emit RemoteTokenSet(_domain, _remoteToken);
     }
@@ -345,7 +345,7 @@ contract StakingVaultOFTUpgradeable is
         // Refund excess ETH if any
         if (excessFee > 0) {
             (bool success, ) = msg.sender.call{ value: excessFee }("");
-            require(success, "ETH refund failed");
+            if (!success) revert EthRefundFailed();
         }
 
         emit HyperlaneTransfer(
