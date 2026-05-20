@@ -190,9 +190,7 @@ describe('StakingVaultOFTUpgradeable — pausable', function () {
     it('allows rebase again after unpause', async function () {
       await StakingVault.pause();
       await StakingVault.unpause();
-      await expect(
-        StakingVault.connect(rebaseManager).rebase(rebaseAmount)
-      )
+      await expect(StakingVault.connect(rebaseManager).rebase(rebaseAmount))
         .to.emit(StakingVault, 'Rebase')
         .withArgs(rebaseAmount);
     });
