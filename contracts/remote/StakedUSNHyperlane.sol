@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "../interfaces/IStakedUSNHyperlane.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
@@ -16,6 +17,7 @@ contract StakedUSNHyperlane is
     Ownable2StepUpgradeable,
     ERC20Upgradeable,
     ERC20BurnableUpgradeable,
+    PausableUpgradeable,
     IStakedUSNHyperlane,
     IMessageRecipient
 {
@@ -37,8 +39,17 @@ contract StakedUSNHyperlane is
         __Ownable_init(_owner);
         __ERC20_init(_name, _symbol);
         __ERC20Burnable_init();
+        __Pausable_init();
         _grantRole(DEFAULT_ADMIN_ROLE, _owner);
         _grantRole(BLACKLIST_MANAGER_ROLE, _owner);
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 
     function blacklistAccount(address account) external onlyRole(BLACKLIST_MANAGER_ROLE) {
@@ -51,7 +62,7 @@ contract StakedUSNHyperlane is
         emit Unblacklisted(account);
     }
 
-    function _update(address from, address to, uint256 amount) internal virtual override {
+    function _update(address from, address to, uint256 amount) internal virtual override whenNotPaused {
         if (blacklist[from] || blacklist[to]) revert BlacklistedAddress();
         super._update(from, to, amount);
     }
