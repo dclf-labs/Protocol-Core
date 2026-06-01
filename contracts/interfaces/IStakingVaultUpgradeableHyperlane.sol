@@ -65,6 +65,7 @@ interface IStakingVaultUpgradeableHyperlane is IERC20 {
     error StuckMessageRequestAlreadyExecuted();
     error StuckMessageTimelockNotElapsed();
     error InsufficientLockedBalance();
+    error EthRefundFailed();
 
     // Functions
     function rebase(uint256 _amount) external;
