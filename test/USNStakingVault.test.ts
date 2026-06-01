@@ -79,7 +79,11 @@ describe('USNStakingVault', function () {
     );
 
     // Mint initial USN for users
-    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const latestBlock = await ethers.provider.getBlock('latest');
+    const currentTimestamp = Math.max(
+      latestBlock?.timestamp ?? 0,
+      Math.floor(Date.now() / 1000)
+    );
     const expiry = currentTimestamp + 360000; // 100 hours from now
     const nonce = 1;
 
