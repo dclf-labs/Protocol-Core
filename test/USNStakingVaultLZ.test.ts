@@ -148,8 +148,9 @@ describe('USNStakingVault', function () {
     }
 
     // Mint initial USN for users
-    const currentTimestamp = Math.floor(Date.now() / 1000);
-    const expiry = currentTimestamp + 360000 * 10; // 100000 hours from now
+    const latestBlock = await ethers.provider.getBlock('latest');
+    const currentTimestamp = latestBlock!.timestamp;
+    const expiry = currentTimestamp + 360000 * 10; // ~1000 hours from now (on EVM clock)
     const nonce = 1;
 
     for (const user of [user1, user2, rebaseManager]) {
@@ -607,7 +608,8 @@ describe('USNStakingVault', function () {
   });
   it('should allow depositWithPermit', async function () {
     const amount = ethers.parseUnits('1000', 18);
-    const deadline = Math.floor(Date.now() / 1000) + 3600 * 100; // 100 hour from now
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hour from now (EVM clock)
     const nonce = await USN.nonces(user1.address);
 
     const domain = {
@@ -664,7 +666,8 @@ describe('USNStakingVault', function () {
     );
 
     const amount = ethers.parseUnits('1000', 18);
-    const deadline = Math.floor(Date.now() / 1000) + 3600 * 100; // 100 hour from now
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hour from now (EVM clock)
     const nonce = await USN.nonces(rebaseManager.address);
 
     const domain = {
