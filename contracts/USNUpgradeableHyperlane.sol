@@ -6,8 +6,9 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
-import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
-import "../interfaces/IUSN.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
+import "./interfaces/IUSN.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
@@ -19,6 +20,7 @@ contract USNUpgradeableHyperlane is
     Ownable2StepUpgradeable,
     ERC20BurnableUpgradeable,
     ERC20PermitUpgradeable,
+    PausableUpgradeable,
     IMessageRecipient
 {
     address public admin;
@@ -56,6 +58,15 @@ contract USNUpgradeableHyperlane is
         __ERC20Permit_init(name);
         __OFT_init(name, symbol, _owner);
         __Ownable2Step_init();
+        __Pausable_init();
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 
     // Setup Hyperlane integration
@@ -199,7 +210,11 @@ contract USNUpgradeableHyperlane is
         return super.decimals();
     }
 
-    function _update(address from, address to, uint256 amount) internal virtual override(ERC20Upgradeable) {
+    function _update(
+        address from,
+        address to,
+        uint256 amount
+    ) internal virtual override(ERC20Upgradeable) whenNotPaused {
         if (blacklist[from] || blacklist[to]) revert BlacklistedAddress();
         if (!permissionless && (!isWhitelisted(from) || !isWhitelisted(to))) revert NotWhitelisted(from, to);
         super._update(from, to, amount);
