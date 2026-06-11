@@ -3,7 +3,7 @@ import { expect } from 'chai';
 import { ethers, upgrades } from 'hardhat';
 import type {
   USN,
-  StakingVaultOFTUpgradeable,
+  StakingVaultOFTUpgradeableHyperlane,
   EndpointV2Mock,
 } from '../typechain-types';
 
@@ -18,9 +18,9 @@ async function increaseTime(seconds: number) {
   await ethers.provider.send('evm_mine', []);
 }
 
-describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function () {
+describe('StakingVaultOFTUpgradeableHyperlane — stuck message reconciliation', function () {
   let USN: USN;
-  let StakingVault: StakingVaultOFTUpgradeable;
+  let StakingVault: StakingVaultOFTUpgradeableHyperlane;
   let endpointMock: EndpointV2Mock;
   let owner: HardhatEthersSigner;
   let admin: HardhatEthersSigner;
@@ -43,7 +43,7 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
     await USN.mint(await user.getAddress(), initialMint);
 
     const StakingVaultFactory = await ethers.getContractFactory(
-      'StakingVaultOFTUpgradeable'
+      'StakingVaultOFTUpgradeableHyperlane'
     );
     const proxy = await upgrades.deployProxy(
       StakingVaultFactory,
@@ -56,7 +56,7 @@ describe('StakingVaultOFTUpgradeable — stuck message reconciliation', function
     );
     StakingVault = StakingVaultFactory.attach(
       await proxy.getAddress()
-    ) as StakingVaultOFTUpgradeable;
+    ) as StakingVaultOFTUpgradeableHyperlane;
 
     await USN.connect(user).approve(
       await StakingVault.getAddress(),
