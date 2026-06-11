@@ -7,8 +7,8 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20Burnable
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
-import "../interfaces/IUSN.sol";
+import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
+import "./interfaces/IUSN.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";

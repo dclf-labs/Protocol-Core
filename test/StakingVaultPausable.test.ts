@@ -39,7 +39,7 @@ describe('StakingVaultOFTUpgradeable — pausable', function () {
     await USN.mint(await rebaseManager.getAddress(), initialMint);
 
     const StakingVaultFactory = await ethers.getContractFactory(
-      'StakingVaultOFTUpgradeable'
+      'StakingVaultOFTUpgradeableHyperlane'
     );
     const proxy = await upgrades.deployProxy(
       StakingVaultFactory,

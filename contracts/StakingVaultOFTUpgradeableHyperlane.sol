@@ -9,9 +9,9 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
-import "../interfaces/IStakingVaultUpgradeableHyperlane.sol";
-import "../interfaces/IWithdrawalHandler.sol";
+import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
+import "./interfaces/IStakingVaultUpgradeableHyperlane.sol";
+import "./interfaces/IWithdrawalHandler.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
@@ -44,7 +44,7 @@ abstract contract StakingVaultStorageV1 {
     uint256[50] private __gap;
 }
 
-contract StakingVaultOFTUpgradeable is
+contract StakingVaultOFTUpgradeableHyperlane is
     Initializable,
     ERC4626Upgradeable,
     AccessControlUpgradeable,

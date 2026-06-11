@@ -6,7 +6,7 @@ import { ethers, upgrades } from 'hardhat';
 import type {
   USN,
   MinterHandlerV2,
-  StakingVaultOFTUpgradeable,
+  StakingVaultOFTUpgradeableHyperlane,
   MockERC20,
   WithdrawalHandler,
   EndpointV2Mock,
@@ -26,8 +26,8 @@ type SendParamStruct = {
 describe('USNStakingVault', function () {
   let USN: USN;
   let MinterHandlerV2: MinterHandlerV2;
-  let StakingVault: StakingVaultOFTUpgradeable;
-  let StakingVaultDst: StakingVaultOFTUpgradeable;
+  let StakingVault: StakingVaultOFTUpgradeableHyperlane;
+  let StakingVaultDst: StakingVaultOFTUpgradeableHyperlane;
   let mockCollateral: MockERC20;
   let owner: HardhatEthersSigner;
   let user1: HardhatEthersSigner;
@@ -70,9 +70,9 @@ describe('USNStakingVault', function () {
       await ethers.getContractFactory('MinterHandlerV2');
     MinterHandlerV2 = await MinterHandlerFactory.deploy(await USN.getAddress());
 
-    // Deploy StakingVaultOFTUpgradeable with proxy on source chain
+    // Deploy StakingVaultOFTUpgradeableHyperlane with proxy on source chain
     const StakingVaultFactory = await ethers.getContractFactory(
-      'StakingVaultOFTUpgradeable'
+      'StakingVaultOFTUpgradeableHyperlane'
     );
     const stakingVaultProxySrc = await upgrades.deployProxy(
       StakingVaultFactory,
@@ -85,10 +85,10 @@ describe('USNStakingVault', function () {
     );
     StakingVault = StakingVaultFactory.attach(
       await stakingVaultProxySrc.getAddress()
-    ) as StakingVaultOFTUpgradeable;
+    ) as StakingVaultOFTUpgradeableHyperlane;
     const StakedUSNBasicOFTFactory =
       await ethers.getContractFactory('USNOFTHyperlane');
-    // Deploy StakingVaultOFTUpgradeable with proxy on destination chain
+    // Deploy StakingVaultOFTUpgradeableHyperlane with proxy on destination chain
     const stakingVaultProxyDst = await upgrades.deployProxy(
       StakedUSNBasicOFTFactory,
       ['Staked USN', 'sUSN', await owner.getAddress()],
@@ -101,7 +101,7 @@ describe('USNStakingVault', function () {
 
     StakingVaultDst = StakedUSNBasicOFTFactory.attach(
       await stakingVaultProxyDst.getAddress()
-    ) as StakingVaultOFTUpgradeable;
+    ) as StakingVaultOFTUpgradeableHyperlane;
 
     await endpointV2MockSrc.setDestLzEndpoint(
       await StakingVaultDst.getAddress(),
