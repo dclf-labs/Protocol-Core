@@ -8,7 +8,7 @@ import {
   MinterHandlerV2,
   StakingVault,
   MockERC20,
-} from '../typechain-types';
+} from '../../typechain-types';
 
 describe('RedeemHandler', function () {
   let usn: USN;
@@ -103,7 +103,8 @@ describe('RedeemHandler', function () {
     await minterHandler.setCustodialWallet(await redeemHandler.getAddress());
     // Prepare mint parameters
     const nonce = 1;
-    const expiry = Math.floor(Date.now() / 1000) + 3600 * 100; // 100 hours from now
+    const expiry =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hours from now
     const order = {
       message: `You are signing a request to mint ${initialMint} USN using ${initialMint} MCL as collateral.`,
       user: user.address,
@@ -155,7 +156,8 @@ describe('RedeemHandler', function () {
     );
 
     // Prepare the redeem order
-    const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600; // 1 hour from now
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,
       user: user.address,
@@ -217,7 +219,7 @@ describe('RedeemHandler', function () {
 
     // Perform rebase
     const nonce = 0;
-    const expiry = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+    const expiry = (await ethers.provider.getBlock('latest'))!.timestamp + 3600; // 1 hour from now
     const order = {
       message: `You are signing a request to mint ${rebaseAmount} USN using ${rebaseAmount} MCL as collateral.`,
       user: rebaseManager.address,
@@ -432,7 +434,9 @@ describe('RedeemHandler', function () {
   it('should redeem with permit', async function () {
     const redeemAmount = ethers.parseUnits('100', 18);
     const collateralAmount = ethers.parseUnits('50', 18);
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600 * 100); // 100 hour from now
+    const deadline = BigInt(
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100
+    ); // 100 hour from now
     // Change usn minter to owner
     await usn.setAdmin(await owner.getAddress());
     // Mint USN to user
@@ -536,7 +540,8 @@ describe('RedeemHandler', function () {
 
     const redeemAmount = ethers.parseUnits('500000', 18);
     const collateralAmount = ethers.parseUnits('500000', 18);
-    const deadline = Math.floor(Date.now() / 1000) + 3600 * 100;
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
 
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,
@@ -643,7 +648,8 @@ describe('RedeemHandler', function () {
   it('should allow redeeming in a new block after limit reset', async () => {
     const redeemAmount = ethers.parseUnits('500000', 18);
     const collateralAmount = ethers.parseUnits('500000', 18);
-    const deadline = Math.floor(Date.now() / 1000) + 3600 * 100;
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
 
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,
@@ -777,7 +783,7 @@ describe('RedeemHandler', function () {
       collateralAddress: await mockCollateral.getAddress(),
       usnAmount: ethers.parseUnits('1000', 18),
       collateralAmount: ethers.parseUnits('1000', 18),
-      expiry: Math.floor(Date.now() / 1000) + 3600,
+      expiry: (await ethers.provider.getBlock('latest'))!.timestamp + 3600,
       nonce: 1000,
     };
 

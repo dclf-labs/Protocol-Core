@@ -318,7 +318,8 @@ describe('USN', function () {
 
     beforeEach(async () => {
       [owner, spender] = await hreEthers.getSigners();
-      deadline = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour from now
+      const latestBlock = await hreEthers.provider.getBlock('latest');
+      deadline = BigInt(latestBlock!.timestamp + 3600); // 1 hour from now (EVM clock)
     });
 
     it('should allow permit', async () => {
@@ -433,7 +434,8 @@ describe('USN', function () {
     it('should revert on invalid signature', async () => {
       const nonce = await usnToken.nonces(owner.address);
       const name = await usnToken.name();
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600 * 1000); // 1000 hour from now
+      const latestBlock = await hreEthers.provider.getBlock('latest');
+      const deadline = BigInt(latestBlock!.timestamp + 3600 * 1000); // 1000 hour from now (EVM clock)
       const version = '1';
       const chainId = await hreEthers.provider
         .getNetwork()

@@ -31,9 +31,6 @@ interface IChainlinkPriceFeed {
 contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EIP712 {
     using SafeERC20 for IERC20;
 
-    // Custom errors
-    error ThresholdTooHigh(uint256 threshold, uint256 max);
-
     // Constants
     /// @dev MINTER_ROLE can be granted to any address, including multisig wallets (e.g. Gnosis Safe).
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
@@ -41,7 +38,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         keccak256(
             "Order(string message,address user,address collateralAddress,uint256 collateralAmount,uint256 usnAmount,uint256 expiry,uint256 nonce)"
         );
-    
+
     // Price constants (8 decimals to match Chainlink)
     uint256 public constant PRICE_PRECISION = 1e8;
     uint256 public constant ONE_USD = 1e8; // $1.00 with 8 decimals
@@ -56,7 +53,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
     uint256 public lastMintBlock;
     /// @dev Max USN amount that can be rebased in a single mintAndRebase call; managed by DEFAULT_ADMIN_ROLE.
     uint256 public rebaseLimit;
-    
+
     // Direct mint config
     uint256 public priceThresholdBps = 100; // 1% = 100 bps (0.99 - 1.01)
     uint256 public directMintLimitPerDay;
@@ -68,7 +65,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
     mapping(address => bool) public whitelistedUsers;
     mapping(address => bool) public whitelistedCollaterals;
     mapping(address => mapping(uint256 => bool)) private usedNonces;
-    
+
     // Oracle mappings (collateral => Chainlink price feed)
     mapping(address => address) public priceFeeds;
 
@@ -84,6 +81,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         directMintLimitPerDay = 100000 * 10 ** 18; // Default: 100k USN per day for direct mints
         rebaseLimit = 30000 * 10 ** 18; // Default: 30,000 USN per mintAndRebase call
     }
+
     // External functions
     function setCustodialWallet(address _custodialWallet) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (_custodialWallet == address(0)) {
@@ -216,65 +214,65 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         if (!whitelistedUsers[msg.sender]) {
             revert UserNotWhitelisted(msg.sender);
         }
-        
+
         // Verify collateral is whitelisted
         if (!whitelistedCollaterals[collateralAddress]) {
             revert CollateralNotWhitelisted(collateralAddress);
         }
-        
+
         // Verify price feed exists
         address priceFeed = priceFeeds[collateralAddress];
         if (priceFeed == address(0)) {
             revert PriceFeedNotSet(collateralAddress);
         }
-        
+
         if (collateralAmount == 0) {
             revert ZeroAmount();
         }
-        
+
         // Get price from oracle
         uint256 price = _getPrice(priceFeed);
-        
+
         // Calculate USN amount based on price logic
         uint256 usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, price);
-        
+
         // Slippage protection
         if (usnAmount < minUsnAmount) {
             revert CollateralUsnMismatch(collateralAmount, minUsnAmount);
         }
-        
+
         // Check daily direct mint limit
         uint256 currentDay = block.timestamp / 1 days;
         if (currentDay > lastDirectMintDay) {
             currentDayDirectMintAmount = 0;
             lastDirectMintDay = currentDay;
         }
-        
+
         if (currentDayDirectMintAmount + usnAmount > directMintLimitPerDay) {
             revert DirectMintLimitExceeded(directMintLimitPerDay, currentDayDirectMintAmount + usnAmount);
         }
-        
+
         // Check per-block limit as well
         if (block.number > lastMintBlock) {
             currentBlockMintAmount = 0;
             lastMintBlock = block.number;
         }
-        
+
         if (currentBlockMintAmount + usnAmount > mintLimitPerBlock) {
             revert MintLimitExceeded(mintLimitPerBlock, currentBlockMintAmount + usnAmount);
         }
-        
+
         // Update counters
         currentDayDirectMintAmount += usnAmount;
         currentBlockMintAmount += usnAmount;
-        
+
         // Transfer collateral and mint USN
         _transferCollateral(collateralAddress, msg.sender, collateralAmount);
         usnToken.mint(msg.sender, usnAmount);
-        
+
         emit DirectMint(msg.sender, collateralAmount, usnAmount, collateralAddress, price);
     }
-    
+
     /**
      * @notice Preview how much USN would be minted for a given collateral amount
      * @param collateralAddress The collateral token address
@@ -290,11 +288,11 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         if (priceFeed == address(0)) {
             revert PriceFeedNotSet(collateralAddress);
         }
-        
+
         priceUsed = _getPrice(priceFeed);
         usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, priceUsed);
     }
-    
+
     /**
      * @notice Calculate USN amount based on collateral and price
      * @dev Price logic:
@@ -309,16 +307,16 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
     ) internal view returns (uint256) {
         uint256 collateralDecimals = IERC20Metadata(collateralAddress).decimals();
         uint256 usnDecimals = usnToken.decimals();
-        
+
         // Normalize collateral to 18 decimals
         uint256 normalizedCollateral = collateralAmount * 10 ** (18 - collateralDecimals);
-        
+
         // Calculate bounds
         uint256 lowerBound = ONE_USD - (ONE_USD * priceThresholdBps / 10000); // e.g., 0.99 USD
         uint256 upperBound = ONE_USD + (ONE_USD * priceThresholdBps / 10000); // e.g., 1.01 USD
-        
+
         uint256 usnAmount;
-        
+
         if (price >= lowerBound && price <= upperBound) {
             // Within threshold: 1:1 mint
             usnAmount = normalizedCollateral;
@@ -330,38 +328,38 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
             // Above threshold: cap at 1:1 (don't give more than deposited)
             usnAmount = normalizedCollateral;
         }
-        
+
         // Adjust for USN decimals if different from 18
         if (usnDecimals != 18) {
             usnAmount = usnAmount / 10 ** (18 - usnDecimals);
         }
-        
+
         return usnAmount;
     }
-    
+
     /**
      * @notice Get price from Chainlink oracle
      */
     function _getPrice(address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
-        
+
         (
             ,
             int256 answer,
             ,
             uint256 updatedAt,
         ) = oracle.latestRoundData();
-        
+
         // Check staleness
         if (block.timestamp - updatedAt > oracleStalenessThreshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
-        
+
         // Check valid price
         if (answer <= 0) {
             revert InvalidPrice(answer);
         }
-        
+
         // Normalize to 8 decimals (standard Chainlink precision)
         uint8 feedDecimals = oracle.decimals();
         if (feedDecimals == 8) {
@@ -372,9 +370,9 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
             return uint256(answer) / 10 ** (feedDecimals - 8);
         }
     }
-    
+
     // ============ Admin Functions for Direct Mint ============
-    
+
     /**
      * @notice Set price feed for a collateral token
      * @param collateral The collateral token address
@@ -385,19 +383,17 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         priceFeeds[collateral] = priceFeed;
         emit PriceFeedSet(collateral, priceFeed);
     }
-    
+
     /**
      * @notice Set price threshold in basis points
      * @param _thresholdBps Threshold in bps (100 = 1%)
      */
     function setPriceThreshold(uint256 _thresholdBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (_thresholdBps > 1000) {
-            revert ThresholdTooHigh(_thresholdBps, 1000); // Max 10%
-        }
+        require(_thresholdBps <= 1000, "Threshold too high"); // Max 10%
         priceThresholdBps = _thresholdBps;
         emit PriceThresholdUpdated(_thresholdBps);
     }
-    
+
     /**
      * @notice Set daily limit for direct mints
      * @param _limit Daily limit in USN (18 decimals)
@@ -406,7 +402,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         directMintLimitPerDay = _limit;
         emit DirectMintLimitUpdated(_limit);
     }
-    
+
     /**
      * @notice Set oracle staleness threshold
      * @param _threshold Staleness threshold in seconds

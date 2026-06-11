@@ -7,7 +7,7 @@ import {
   MinterHandlerV2,
   StakingVault,
   MockERC20,
-} from '../typechain-types';
+} from '../../typechain-types';
 
 describe('USNStakingVault', function () {
   let USN: USN;

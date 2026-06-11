@@ -44,7 +44,7 @@ abstract contract StakingVaultStorageV1 {
     uint256[50] private __gap;
 }
 
-contract StakingVaultOFTUpgradeable is
+contract StakingVaultOFTUpgradeableHyperlane is
     Initializable,
     ERC4626Upgradeable,
     AccessControlUpgradeable,

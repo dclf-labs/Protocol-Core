@@ -51,7 +51,7 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - name: Install dependencies with dev deps
-        run: npm install
+        run: yarn install --frozen-lockfile
 
       - name: Hardhat compile
         run: npx hardhat compile --force

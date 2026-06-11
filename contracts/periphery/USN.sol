@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 
 import { OFT, ERC20 } from "@layerzerolabs/oft-evm/contracts/OFT.sol";
 import { Ownable2Step, Ownable } from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import { IUSN } from "./interfaces/IUSN.sol";
+import { IUSN } from "../interfaces/IUSN.sol";
 import { ERC20Burnable } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import { ERC20Permit } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 
@@ -20,8 +20,8 @@ contract USN is IUSN, OFT, Ownable2Step, ERC20Burnable, ERC20Permit {
 
     error NotWhitelisted(address from, address to);
 
-    constructor(address _lzEndpoint) 
-        OFT("USN", "USN", _lzEndpoint, msg.sender) 
+    constructor(address _lzEndpoint)
+        OFT("USN", "USN", _lzEndpoint, msg.sender)
         Ownable(msg.sender)
         ERC20Permit("USN")
     {
