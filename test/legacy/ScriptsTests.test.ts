@@ -1,11 +1,11 @@
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
 import { expect } from 'chai';
 import { ethers, ethers as hreEthers } from 'hardhat';
-import { blacklistAccountInStakingVault } from '../scripts/jobs/blacklistSUSN';
-import { blacklistAccountUSN } from '../scripts/jobs/blacklistUSN';
-import { mintUSN } from '../scripts/jobs/mint';
-import { rebaseStakingVault } from '../scripts/jobs/rebase';
-import { redeemUSN } from '../scripts/jobs/redeem';
+import { blacklistAccountInStakingVault } from '../../scripts/jobs/blacklistSUSN';
+import { blacklistAccountUSN } from '../../scripts/jobs/blacklistUSN';
+import { mintUSN } from '../../scripts/jobs/mint';
+import { rebaseStakingVault } from '../../scripts/jobs/rebase';
+import { redeemUSN } from '../../scripts/jobs/redeem';
 
 import {
   USN,
@@ -13,7 +13,7 @@ import {
   MockERC20,
   StakingVault,
   EndpointV2Mock,
-} from '../typechain-types';
+} from '../../typechain-types';
 
 describe('Scripts Tests', () => {
   let provider: ethers.Provider;
