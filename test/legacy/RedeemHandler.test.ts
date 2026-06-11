@@ -103,7 +103,8 @@ describe('RedeemHandler', function () {
     await minterHandler.setCustodialWallet(await redeemHandler.getAddress());
     // Prepare mint parameters
     const nonce = 1;
-    const expiry = (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hours from now
+    const expiry =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hours from now
     const order = {
       message: `You are signing a request to mint ${initialMint} USN using ${initialMint} MCL as collateral.`,
       user: user.address,
@@ -155,7 +156,8 @@ describe('RedeemHandler', function () {
     );
 
     // Prepare the redeem order
-    const deadline = (await ethers.provider.getBlock('latest'))!.timestamp + 3600; // 1 hour from now
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600; // 1 hour from now
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,
       user: user.address,
@@ -432,7 +434,9 @@ describe('RedeemHandler', function () {
   it('should redeem with permit', async function () {
     const redeemAmount = ethers.parseUnits('100', 18);
     const collateralAmount = ethers.parseUnits('50', 18);
-    const deadline = BigInt((await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100); // 100 hour from now
+    const deadline = BigInt(
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100
+    ); // 100 hour from now
     // Change usn minter to owner
     await usn.setAdmin(await owner.getAddress());
     // Mint USN to user
@@ -536,7 +540,8 @@ describe('RedeemHandler', function () {
 
     const redeemAmount = ethers.parseUnits('500000', 18);
     const collateralAmount = ethers.parseUnits('500000', 18);
-    const deadline = (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
 
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,
@@ -643,7 +648,8 @@ describe('RedeemHandler', function () {
   it('should allow redeeming in a new block after limit reset', async () => {
     const redeemAmount = ethers.parseUnits('500000', 18);
     const collateralAmount = ethers.parseUnits('500000', 18);
-    const deadline = (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
+    const deadline =
+      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100;
 
     const redeemOrder = {
       message: `You are signing a request to redeem ${redeemAmount} USN for ${collateralAmount} MCL.`,

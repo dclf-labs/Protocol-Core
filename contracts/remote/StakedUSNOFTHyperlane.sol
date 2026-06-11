@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
+import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
-import "./interfaces/IStakedUSNBasicOFT.sol";
+import "../interfaces/IStakedUSNBasicOFT.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";

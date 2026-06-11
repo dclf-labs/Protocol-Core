@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
-import "./interfaces/IStakingVault.sol";
+import "../interfaces/IStakingVault.sol";
 
 contract StakingVault is ERC4626, AccessControl, ReentrancyGuard, IStakingVault {
     using SafeERC20 for IERC20;
