@@ -6,8 +6,8 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
-import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
-import "./interfaces/IUSN.sol";
+import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
+import "../interfaces/IUSN.sol";
 
 contract USNUpgradeable is
     Initializable,

@@ -35,10 +35,10 @@ describe('USNUpgradeableHyperlane — pausable', function () {
         initializer: 'initialize',
         constructorArgs: [await endpointMock.getAddress()],
         unsafeAllow: ['constructor'],
-      },
+      }
     );
     token = Factory.attach(
-      await proxy.getAddress(),
+      await proxy.getAddress()
     ) as unknown as USNUpgradeableHyperlane;
 
     // Permissionless transfers + admin minting so tests can seed balances
@@ -57,7 +57,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
   describe('access control', function () {
     it('only owner can pause', async function () {
       await expect(
-        token.connect(outsider).pause(),
+        token.connect(outsider).pause()
       ).to.be.revertedWithCustomError(token, 'OwnableUnauthorizedAccount');
       expect(await token.paused()).to.equal(false);
     });
@@ -65,7 +65,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
     it('only owner can unpause', async function () {
       await token.pause();
       await expect(
-        token.connect(outsider).unpause(),
+        token.connect(outsider).unpause()
       ).to.be.revertedWithCustomError(token, 'OwnableUnauthorizedAccount');
       expect(await token.paused()).to.equal(true);
     });
@@ -73,7 +73,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
     it('admin (mint privilege) cannot pause', async function () {
       await expect(token.connect(admin).pause()).to.be.revertedWithCustomError(
         token,
-        'OwnableUnauthorizedAccount',
+        'OwnableUnauthorizedAccount'
       );
     });
 
@@ -85,7 +85,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
       // old owner is no longer authorized
       await expect(token.unpause()).to.be.revertedWithCustomError(
         token,
-        'OwnableUnauthorizedAccount',
+        'OwnableUnauthorizedAccount'
       );
     });
   });
@@ -110,14 +110,14 @@ describe('USNUpgradeableHyperlane — pausable', function () {
       await token.pause();
       await expect(token.pause()).to.be.revertedWithCustomError(
         token,
-        'EnforcedPause',
+        'EnforcedPause'
       );
     });
 
     it('reverts when unpausing a contract that is not paused', async function () {
       await expect(token.unpause()).to.be.revertedWithCustomError(
         token,
-        'ExpectedPause',
+        'ExpectedPause'
       );
     });
   });
@@ -135,19 +135,20 @@ describe('USNUpgradeableHyperlane — pausable', function () {
 
     it('blocks transfers (_update)', async function () {
       await expect(
-        token.connect(user).transfer(await other.getAddress(), 1n),
+        token.connect(user).transfer(await other.getAddress(), 1n)
       ).to.be.revertedWithCustomError(token, 'EnforcedPause');
     });
 
     it('blocks burns', async function () {
-      await expect(
-        token.connect(user).burn(1n),
-      ).to.be.revertedWithCustomError(token, 'EnforcedPause');
+      await expect(token.connect(user).burn(1n)).to.be.revertedWithCustomError(
+        token,
+        'EnforcedPause'
+      );
     });
 
     it('blocks admin mint', async function () {
       await expect(
-        token.connect(admin).mint(await other.getAddress(), 1n),
+        token.connect(admin).mint(await other.getAddress(), 1n)
       ).to.be.revertedWithCustomError(token, 'EnforcedPause');
     });
 
@@ -156,9 +157,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
       // check trips even though no mailbox is wired up.
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await expect(
-        token
-          .connect(user)
-          .sendTokensViaHyperlane(domain, recipient, seed / 2n),
+        token.connect(user).sendTokensViaHyperlane(domain, recipient, seed / 2n)
       ).to.be.revertedWithCustomError(token, 'EnforcedPause');
     });
 
@@ -168,7 +167,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
         ethers.zeroPadValue(ethers.toBeHex(ethers.parseUnits('1', 18)), 32),
       ]);
       await expect(
-        token.connect(mailboxSigner).handle(domain, remoteToken, message),
+        token.connect(mailboxSigner).handle(domain, remoteToken, message)
       ).to.be.revertedWithCustomError(token, 'EnforcedPause');
     });
   });
@@ -179,7 +178,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
       await token.unpause();
       const amount = ethers.parseUnits('1', 18);
       await expect(
-        token.connect(user).transfer(await other.getAddress(), amount),
+        token.connect(user).transfer(await other.getAddress(), amount)
       ).to.not.be.reverted;
       expect(await token.balanceOf(await other.getAddress())).to.equal(amount);
     });
@@ -226,7 +225,7 @@ describe('USNUpgradeableHyperlane — pausable', function () {
       await expect(token.addToWhitelist(await outsider.getAddress())).to.not.be
         .reverted;
       expect(await token.isWhitelisted(await outsider.getAddress())).to.equal(
-        true,
+        true
       );
     });
   });

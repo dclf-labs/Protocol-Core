@@ -35,22 +35,19 @@ describe('Timelock', function () {
     pa: string,
     p: string,
     impl: string,
-    data: string,
+    data: string
   ): Promise<string> {
     return ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
         ['address', 'address', 'address', 'bytes'],
-        [pa, p, impl, data],
-      ),
+        [pa, p, impl, data]
+      )
     );
   }
 
   async function ownershipOpId(pa: string, no: string): Promise<string> {
     return ethers.keccak256(
-      ethers.AbiCoder.defaultAbiCoder().encode(
-        ['address', 'address'],
-        [pa, no],
-      ),
+      ethers.AbiCoder.defaultAbiCoder().encode(['address', 'address'], [pa, no])
     );
   }
 
@@ -65,7 +62,7 @@ describe('Timelock', function () {
     const TimelockFactory = await ethers.getContractFactory('Timelock');
     timelock = await TimelockFactory.deploy(
       await owner.getAddress(),
-      initialDelay,
+      initialDelay
     );
   });
 
@@ -79,7 +76,7 @@ describe('Timelock', function () {
       const TimelockFactory = await ethers.getContractFactory('Timelock');
       const tl = await TimelockFactory.deploy(
         await owner.getAddress(),
-        MIN_DELAY,
+        MIN_DELAY
       );
       await tl.waitForDeployment();
       await expect(tl.deploymentTransaction())
@@ -90,14 +87,14 @@ describe('Timelock', function () {
     it('reverts when initialDelay < MIN_DELAY', async function () {
       const TimelockFactory = await ethers.getContractFactory('Timelock');
       await expect(
-        TimelockFactory.deploy(await owner.getAddress(), MIN_DELAY - 1),
+        TimelockFactory.deploy(await owner.getAddress(), MIN_DELAY - 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayTooShort');
     });
 
     it('reverts when initialDelay > MAX_DELAY', async function () {
       const TimelockFactory = await ethers.getContractFactory('Timelock');
       await expect(
-        TimelockFactory.deploy(await owner.getAddress(), MAX_DELAY + 1),
+        TimelockFactory.deploy(await owner.getAddress(), MAX_DELAY + 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayTooLong');
     });
 
@@ -105,11 +102,11 @@ describe('Timelock', function () {
       const TimelockFactory = await ethers.getContractFactory('Timelock');
       const tlMin = await TimelockFactory.deploy(
         await owner.getAddress(),
-        MIN_DELAY,
+        MIN_DELAY
       );
       const tlMax = await TimelockFactory.deploy(
         await owner.getAddress(),
-        MAX_DELAY,
+        MAX_DELAY
       );
       expect(await tlMin.delay()).to.equal(MIN_DELAY);
       expect(await tlMax.delay()).to.equal(MAX_DELAY);
@@ -119,7 +116,7 @@ describe('Timelock', function () {
       expect(await timelock.MIN_DELAY()).to.equal(MIN_DELAY);
       expect(await timelock.MAX_DELAY()).to.equal(MAX_DELAY);
       expect(await timelock.OWNERSHIP_TRANSFER_DELAY()).to.equal(
-        OWNERSHIP_TRANSFER_DELAY,
+        OWNERSHIP_TRANSFER_DELAY
       );
     });
   });
@@ -130,9 +127,9 @@ describe('Timelock', function () {
       const p = await proxy.getAddress();
       const impl = await implementation.getAddress();
       const expected = await opId(pa, p, impl, sampleData);
-      expect(
-        await timelock.getOperationId(pa, p, impl, sampleData),
-      ).to.equal(expected);
+      expect(await timelock.getOperationId(pa, p, impl, sampleData)).to.equal(
+        expected
+      );
     });
 
     it('different inputs produce different ids', async function () {
@@ -148,9 +145,9 @@ describe('Timelock', function () {
       const pa = await proxyAdmin.getAddress();
       const no = await newOwner.getAddress();
       const expected = await ownershipOpId(pa, no);
-      expect(
-        await timelock.getOwnershipTransferOperationId(pa, no),
-      ).to.equal(expected);
+      expect(await timelock.getOwnershipTransferOperationId(pa, no)).to.equal(
+        expected
+      );
     });
   });
 
@@ -163,8 +160,8 @@ describe('Timelock', function () {
             await proxyAdmin.getAddress(),
             await proxy.getAddress(),
             await implementation.getAddress(),
-            sampleData,
-          ),
+            sampleData
+          )
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
@@ -190,7 +187,7 @@ describe('Timelock', function () {
       const impl = await implementation.getAddress();
       await timelock.scheduleUpgrade(pa, p, impl, sampleData);
       await expect(
-        timelock.scheduleUpgrade(pa, p, impl, sampleData),
+        timelock.scheduleUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'OperationAlreadyScheduled');
     });
 
@@ -219,22 +216,20 @@ describe('Timelock', function () {
     it('only owner can execute', async function () {
       await increaseTime(initialDelay);
       await expect(
-        timelock
-          .connect(outsider)
-          .executeUpgrade(pa, p, impl, sampleData),
+        timelock.connect(outsider).executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
     it('reverts OperationNotScheduled for unscheduled op', async function () {
       await expect(
-        timelock.executeUpgrade(pa, p, impl, '0xfeed'),
+        timelock.executeUpgrade(pa, p, impl, '0xfeed')
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
     it('reverts DelayNotElapsed before delay passes', async function () {
       await increaseTime(initialDelay - 60);
       await expect(
-        timelock.executeUpgrade(pa, p, impl, sampleData),
+        timelock.executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'DelayNotElapsed');
     });
 
@@ -264,7 +259,7 @@ describe('Timelock', function () {
       });
       expect(await proxyAdmin.lastValue()).to.equal(value);
       expect(
-        await ethers.provider.getBalance(await proxyAdmin.getAddress()),
+        await ethers.provider.getBalance(await proxyAdmin.getAddress())
       ).to.equal(value);
     });
 
@@ -272,7 +267,7 @@ describe('Timelock', function () {
       await increaseTime(initialDelay);
       await timelock.executeUpgrade(pa, p, impl, sampleData);
       await expect(
-        timelock.executeUpgrade(pa, p, impl, sampleData),
+        timelock.executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
@@ -287,7 +282,7 @@ describe('Timelock', function () {
       await proxyAdmin.setShouldRevert(true, 'proxy-admin-blew-up');
       await increaseTime(initialDelay);
       await expect(
-        timelock.executeUpgrade(pa, p, impl, sampleData),
+        timelock.executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWith('proxy-admin-blew-up');
       const id = await opId(pa, p, impl, sampleData);
       expect(await timelock.scheduledAt(id)).to.not.equal(0);
@@ -308,15 +303,13 @@ describe('Timelock', function () {
 
     it('only owner can cancel', async function () {
       await expect(
-        timelock
-          .connect(outsider)
-          .cancelUpgrade(pa, p, impl, sampleData),
+        timelock.connect(outsider).cancelUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
     it('reverts OperationNotScheduled if not scheduled', async function () {
       await expect(
-        timelock.cancelUpgrade(pa, p, impl, '0xfeed'),
+        timelock.cancelUpgrade(pa, p, impl, '0xfeed')
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
@@ -332,7 +325,7 @@ describe('Timelock', function () {
       await timelock.cancelUpgrade(pa, p, impl, sampleData);
       await increaseTime(initialDelay);
       await expect(
-        timelock.executeUpgrade(pa, p, impl, sampleData),
+        timelock.executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
@@ -346,27 +339,28 @@ describe('Timelock', function () {
   describe('setDelay', function () {
     it('only owner can set delay', async function () {
       await expect(
-        timelock.connect(outsider).setDelay(MAX_DELAY),
+        timelock.connect(outsider).setDelay(MAX_DELAY)
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
     it('rejects newDelay < MIN_DELAY', async function () {
       await expect(
-        timelock.setDelay(MIN_DELAY - 1),
+        timelock.setDelay(MIN_DELAY - 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayTooShort');
     });
 
     it('rejects newDelay > MAX_DELAY', async function () {
       await expect(
-        timelock.setDelay(MAX_DELAY + 1),
+        timelock.setDelay(MAX_DELAY + 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayTooLong');
     });
 
     it('rejects a decrease (newDelay < current)', async function () {
       await timelock.setDelay(MAX_DELAY);
-      await expect(
-        timelock.setDelay(MIN_DELAY),
-      ).to.be.revertedWithCustomError(timelock, 'DelayTooShort');
+      await expect(timelock.setDelay(MIN_DELAY)).to.be.revertedWithCustomError(
+        timelock,
+        'DelayTooShort'
+      );
     });
 
     it('accepts an increase and emits DelayUpdated', async function () {
@@ -393,7 +387,7 @@ describe('Timelock', function () {
       // After the old delay elapses, the new (larger) delay still blocks it.
       await increaseTime(initialDelay);
       await expect(
-        timelock.executeUpgrade(pa, p, impl, sampleData),
+        timelock.executeUpgrade(pa, p, impl, sampleData)
       ).to.be.revertedWithCustomError(timelock, 'DelayNotElapsed');
 
       // After the additional time, it succeeds.
@@ -410,8 +404,8 @@ describe('Timelock', function () {
           await proxyAdmin.getAddress(),
           await proxy.getAddress(),
           await implementation.getAddress(),
-          sampleData,
-        ),
+          sampleData
+        )
       ).to.equal(0);
     });
 
@@ -421,9 +415,9 @@ describe('Timelock', function () {
       const impl = await implementation.getAddress();
       await timelock.scheduleUpgrade(pa, p, impl, sampleData);
       const at = await latestTimestamp();
-      expect(
-        await timelock.getExecuteAfter(pa, p, impl, sampleData),
-      ).to.equal(at + initialDelay);
+      expect(await timelock.getExecuteAfter(pa, p, impl, sampleData)).to.equal(
+        at + initialDelay
+      );
     });
   });
 
@@ -434,8 +428,8 @@ describe('Timelock', function () {
           .connect(outsider)
           .scheduleProxyAdminOwnershipTransfer(
             await proxyAdmin.getAddress(),
-            await newOwner.getAddress(),
-          ),
+            await newOwner.getAddress()
+          )
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
@@ -448,7 +442,7 @@ describe('Timelock', function () {
       const block = await ethers.provider.getBlock(receipt!.blockNumber);
 
       expect(await timelock.scheduledOwnershipTransferAt(id)).to.equal(
-        block!.timestamp,
+        block!.timestamp
       );
       await expect(tx)
         .to.emit(timelock, 'ProxyAdminOwnershipTransferScheduled')
@@ -460,7 +454,7 @@ describe('Timelock', function () {
       const no = await newOwner.getAddress();
       await timelock.scheduleProxyAdminOwnershipTransfer(pa, no);
       await expect(
-        timelock.scheduleProxyAdminOwnershipTransfer(pa, no),
+        timelock.scheduleProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWithCustomError(timelock, 'OperationAlreadyScheduled');
     });
   });
@@ -478,9 +472,7 @@ describe('Timelock', function () {
     it('only owner', async function () {
       await increaseTime(OWNERSHIP_TRANSFER_DELAY);
       await expect(
-        timelock
-          .connect(outsider)
-          .executeProxyAdminOwnershipTransfer(pa, no),
+        timelock.connect(outsider).executeProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
@@ -489,15 +481,15 @@ describe('Timelock', function () {
       await expect(
         timelock.executeProxyAdminOwnershipTransfer(
           pa,
-          await outsider.getAddress(),
-        ),
+          await outsider.getAddress()
+        )
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
     it('reverts DelayNotElapsed before delay passes', async function () {
       await increaseTime(OWNERSHIP_TRANSFER_DELAY - 60);
       await expect(
-        timelock.executeProxyAdminOwnershipTransfer(pa, no),
+        timelock.executeProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWithCustomError(timelock, 'DelayNotElapsed');
     });
 
@@ -521,7 +513,7 @@ describe('Timelock', function () {
       await proxyAdmin.setShouldRevert(true, 'transfer-blew-up');
       await increaseTime(OWNERSHIP_TRANSFER_DELAY);
       await expect(
-        timelock.executeProxyAdminOwnershipTransfer(pa, no),
+        timelock.executeProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWith('transfer-blew-up');
       const id = await ownershipOpId(pa, no);
       expect(await timelock.scheduledOwnershipTransferAt(id)).to.not.equal(0);
@@ -540,9 +532,7 @@ describe('Timelock', function () {
 
     it('only owner', async function () {
       await expect(
-        timelock
-          .connect(outsider)
-          .cancelProxyAdminOwnershipTransfer(pa, no),
+        timelock.connect(outsider).cancelProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
@@ -550,8 +540,8 @@ describe('Timelock', function () {
       await expect(
         timelock.cancelProxyAdminOwnershipTransfer(
           pa,
-          await outsider.getAddress(),
-        ),
+          await outsider.getAddress()
+        )
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
 
@@ -567,7 +557,7 @@ describe('Timelock', function () {
       await timelock.cancelProxyAdminOwnershipTransfer(pa, no);
       await increaseTime(OWNERSHIP_TRANSFER_DELAY);
       await expect(
-        timelock.executeProxyAdminOwnershipTransfer(pa, no),
+        timelock.executeProxyAdminOwnershipTransfer(pa, no)
       ).to.be.revertedWithCustomError(timelock, 'OperationNotScheduled');
     });
   });
@@ -577,8 +567,8 @@ describe('Timelock', function () {
       expect(
         await timelock.getOwnershipTransferExecuteAfter(
           await proxyAdmin.getAddress(),
-          await newOwner.getAddress(),
-        ),
+          await newOwner.getAddress()
+        )
       ).to.equal(0);
     });
 
@@ -587,9 +577,9 @@ describe('Timelock', function () {
       const no = await newOwner.getAddress();
       await timelock.scheduleProxyAdminOwnershipTransfer(pa, no);
       const at = await latestTimestamp();
-      expect(
-        await timelock.getOwnershipTransferExecuteAfter(pa, no),
-      ).to.equal(at + OWNERSHIP_TRANSFER_DELAY);
+      expect(await timelock.getOwnershipTransferExecuteAfter(pa, no)).to.equal(
+        at + OWNERSHIP_TRANSFER_DELAY
+      );
     });
   });
 
@@ -598,7 +588,7 @@ describe('Timelock', function () {
       await timelock.transferOwnership(await newOwner.getAddress());
       expect(await timelock.owner()).to.equal(await owner.getAddress());
       expect(await timelock.pendingOwner()).to.equal(
-        await newOwner.getAddress(),
+        await newOwner.getAddress()
       );
 
       await timelock.connect(newOwner).acceptOwnership();
@@ -611,7 +601,7 @@ describe('Timelock', function () {
 
       await expect(timelock.setDelay(MAX_DELAY)).to.be.revertedWithCustomError(
         timelock,
-        'OwnableUnauthorizedAccount',
+        'OwnableUnauthorizedAccount'
       );
       await expect(timelock.connect(newOwner).setDelay(MAX_DELAY)).to.not.be
         .reverted;

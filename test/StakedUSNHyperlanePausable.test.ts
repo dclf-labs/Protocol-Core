@@ -109,9 +109,10 @@ describe('StakedUSNHyperlane — pausable', function () {
     });
 
     it('blocks burns', async function () {
-      await expect(
-        token.connect(user).burn(1n)
-      ).to.be.revertedWithCustomError(token, 'EnforcedPause');
+      await expect(token.connect(user).burn(1n)).to.be.revertedWithCustomError(
+        token,
+        'EnforcedPause'
+      );
     });
 
     it('blocks Hyperlane outbound sends before any mailbox call', async function () {
@@ -121,9 +122,7 @@ describe('StakedUSNHyperlane — pausable', function () {
       // mailbox interaction.
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await expect(
-        token
-          .connect(user)
-          .sendTokensViaHyperlane(domain, recipient, seed / 2n)
+        token.connect(user).sendTokensViaHyperlane(domain, recipient, seed / 2n)
       ).to.be.revertedWithCustomError(token, 'EnforcedPause');
     });
 
