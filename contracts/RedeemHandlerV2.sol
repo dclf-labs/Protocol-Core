@@ -321,11 +321,6 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
         }
 
-        if (_wouldExceedLimits(q.usnAmount)) {
-            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, q.usnAmount);
-        }
-        _updateLimitCounters(q.usnAmount);
-
         q.status = QueueStatus.APPROVED;
 
         // Execute immediately: burn USN from user and send collateral
