@@ -311,21 +311,6 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
         if (block.timestamp > q.queuedAt + QUEUE_EXPIRY) revert QueueExpired(_queueId);
 
-        // Re-validate the queue entry — state may have changed since it was queued.
-        if (!whitelistedUsers[q.user]) revert UserNotWhitelisted(q.user);
-        if (!_redeemableCollaterals[q.collateralAddress]) revert InvalidCollateralAddress();
-        if (treasury == address(0)) revert TreasuryNotSet();
-
-        uint256 treasuryBalance = IERC20(q.collateralAddress).balanceOf(treasury);
-        if (treasuryBalance < q.collateralAmount) {
-            revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
-        }
-
-        if (_wouldExceedLimits(q.usnAmount)) {
-            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, q.usnAmount);
-        }
-        _updateLimitCounters(q.usnAmount);
-
         q.status = QueueStatus.APPROVED;
 
         // Execute immediately: burn USN from user and send collateral
