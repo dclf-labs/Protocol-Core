@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "./periphery/USN.sol";
@@ -28,7 +29,7 @@ interface IChainlinkPriceFeed {
     function decimals() external view returns (uint8);
 }
 
-contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EIP712 {
+contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessControl, EIP712 {
     using SafeERC20 for IERC20;
 
     // Constants
@@ -130,7 +131,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EI
     function redeem(
         RedeemOrder calldata order,
         bytes calldata signature
-    ) public nonReentrant onlyRole(BURNER_ROLE) {
+    ) public nonReentrant whenNotPaused onlyRole(BURNER_ROLE) {
         if (!whitelistedUsers[order.user]) {
             revert UserNotWhitelisted(order.user);
         }
@@ -200,7 +201,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EI
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external onlyRole(BURNER_ROLE) {
+    ) external whenNotPaused onlyRole(BURNER_ROLE) {
         if (!whitelistedUsers[order.user]) revert UserNotWhitelisted(order.user);
         bytes32 hash = hashOrder(order);
         if (!_isValidSignature(order.user, hash, signature)) revert InvalidSignature();
@@ -226,7 +227,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EI
         address collateralAddress,
         uint256 usnAmount,
         uint256 minCollateralAmount
-    ) external nonReentrant returns (uint256 queueId) {
+    ) external nonReentrant whenNotPaused returns (uint256 queueId) {
         // Verify user is whitelisted
         if (!whitelistedUsers[msg.sender]) {
             revert UserNotWhitelisted(msg.sender);
@@ -304,11 +305,26 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EI
      * @notice Admin approves and executes a queued redeem in one step
      * @dev Burns USN from user and sends collateral at the price locked at queue time
      */
-    function approveQueuedRedeem(uint256 _queueId) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+    function approveQueuedRedeem(uint256 _queueId) external nonReentrant whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
         QueuedRedeem storage q = queuedRedeems[_queueId];
         if (q.queuedAt == 0) revert QueueNotFound(_queueId);
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
         if (block.timestamp > q.queuedAt + QUEUE_EXPIRY) revert QueueExpired(_queueId);
+
+        // Re-validate the queue entry — state may have changed since it was queued.
+        if (!whitelistedUsers[q.user]) revert UserNotWhitelisted(q.user);
+        if (!_redeemableCollaterals[q.collateralAddress]) revert InvalidCollateralAddress();
+        if (treasury == address(0)) revert TreasuryNotSet();
+
+        uint256 treasuryBalance = IERC20(q.collateralAddress).balanceOf(treasury);
+        if (treasuryBalance < q.collateralAmount) {
+            revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
+        }
+
+        if (_wouldExceedLimits(q.usnAmount)) {
+            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, q.usnAmount);
+        }
+        _updateLimitCounters(q.usnAmount);
 
         q.status = QueueStatus.APPROVED;
 
@@ -470,6 +486,18 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, AccessControl, EI
     function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
         oracleStalenessThreshold = _threshold;
         emit OracleStalenessThresholdUpdated(_threshold);
+    }
+
+    /**
+     * @notice Pause redeem entry points (`redeem`, `redeemWithPermit`, `directRedeem`, `approveQueuedRedeem`).
+     * @dev Admin recovery paths (reject/cancel/reclaim) remain callable while paused.
+     */
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 
     function addWhitelistedUser(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {

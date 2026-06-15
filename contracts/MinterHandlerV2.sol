@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./interfaces/IUSN.sol";
 import "./interfaces/IMinterHandlerV2.sol";
 import "./interfaces/ISUSNVault.sol";
@@ -28,7 +29,7 @@ interface IChainlinkPriceFeed {
     function decimals() external view returns (uint8);
 }
 
-contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EIP712 {
+contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessControl, EIP712 {
     using SafeERC20 for IERC20;
 
     // Constants
@@ -118,7 +119,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
      *      REBASE_MANAGER_ROLE on the vault.
      * @param amount Amount of USN to mint and transfer into the vault as rebase.
      */
-    function mintAndRebase(uint256 amount) external nonReentrant onlyRole(MINTER_ROLE) {
+    function mintAndRebase(uint256 amount) external nonReentrant whenNotPaused onlyRole(MINTER_ROLE) {
         if (sUSNVault == address(0)) revert SUSNVaultNotSet();
         if (amount == 0) revert ZeroAmount();
         if (amount > rebaseLimit) revert RebaseLimitExceeded(rebaseLimit, amount);
@@ -130,7 +131,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         emit MintAndRebase(amount);
     }
 
-    function mint(Order calldata order, bytes calldata signature) external nonReentrant onlyRole(MINTER_ROLE) {
+    function mint(Order calldata order, bytes calldata signature) external nonReentrant whenNotPaused onlyRole(MINTER_ROLE) {
         if (!whitelistedUsers[order.user]) {
             revert UserNotWhitelisted(order.user);
         }
@@ -209,7 +210,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
         address collateralAddress,
         uint256 collateralAmount,
         uint256 minUsnAmount
-    ) external nonReentrant {
+    ) external nonReentrant whenNotPaused {
         // Verify user is whitelisted
         if (!whitelistedUsers[msg.sender]) {
             revert UserNotWhitelisted(msg.sender);
@@ -410,6 +411,18 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, AccessControl, EI
     function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
         oracleStalenessThreshold = _threshold;
         emit OracleStalenessThresholdUpdated(_threshold);
+    }
+
+    /**
+     * @notice Pause mint entry points (`mint`, `mintAndRebase`, `directMint`).
+     * @dev Admin configuration setters remain callable while paused.
+     */
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 
     function addWhitelistedUser(address user) external onlyRole(DEFAULT_ADMIN_ROLE) {
