@@ -67,7 +67,7 @@ interface IRedeemHandlerV2 {
     event PriceFeedSet(address indexed collateral, address indexed priceFeed);
     event PriceThresholdUpdated(uint256 newThresholdBps);
     event DirectRedeemLimitUpdated(uint256 newLimit);
-    event OracleStalenessThresholdUpdated(uint256 newThreshold);
+    event CollateralStalenessThresholdUpdated(address indexed collateral, uint256 newThreshold);
 
     // ============ Errors ============
 
@@ -88,6 +88,7 @@ interface IRedeemHandlerV2 {
     error OracleNotSet(address collateral);
     error InvalidOraclePrice(int256 price);
     error StaleOracleData(uint256 updatedAt, uint256 threshold);
+    error StalenessThresholdNotSet(address collateral);
     error UserNotWhitelisted(address user);
     error UserAlreadyWhitelisted(address user);
     error PriceFeedNotSet(address collateral);
@@ -135,7 +136,7 @@ interface IRedeemHandlerV2 {
     function setPriceFeed(address collateral, address priceFeed) external;
     function setPriceThreshold(uint256 thresholdBps) external;
     function setDirectRedeemLimitPerDay(uint256 limit) external;
-    function setOracleStalenessThreshold(uint256 threshold) external;
+    function setCollateralStalenessThreshold(address collateral, uint256 threshold) external;
     function addWhitelistedUser(address user) external;
     function removeWhitelistedUser(address user) external;
 
@@ -153,7 +154,7 @@ interface IRedeemHandlerV2 {
     function priceThresholdBps() external view returns (uint256);
     function directRedeemLimitPerDay() external view returns (uint256);
     function currentDayDirectRedeemAmount() external view returns (uint256);
-    function oracleStalenessThreshold() external view returns (uint256);
+    function collateralStalenessThreshold(address collateral) external view returns (uint256);
     function nextQueueId() external view returns (uint256);
     function QUEUE_EXPIRY() external view returns (uint256);
 }

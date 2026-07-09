@@ -126,6 +126,10 @@ describe('RedeemHandlerV2', function () {
       await collateral.getAddress(),
       await oracle.getAddress()
     );
+    await handler.setCollateralStalenessThreshold(
+      await collateral.getAddress(),
+      3600n
+    );
     await handler.addWhitelistedUser(await user.getAddress());
     await handler.setTreasury(await treasury.getAddress());
 
@@ -169,7 +173,6 @@ describe('RedeemHandlerV2', function () {
         ethers.parseUnits('100000', 18)
       );
       expect(await handler.priceThresholdBps()).to.equal(100n);
-      expect(await handler.oracleStalenessThreshold()).to.equal(3600n);
       expect(await handler.QUEUE_EXPIRY()).to.equal(QUEUE_EXPIRY);
     });
   });
@@ -208,11 +211,21 @@ describe('RedeemHandlerV2', function () {
       expect(await handler.directRedeemLimitPerDay()).to.equal(99n);
     });
 
-    it('setOracleStalenessThreshold emits and updates', async function () {
-      await expect(handler.setOracleStalenessThreshold(120n))
-        .to.emit(handler, 'OracleStalenessThresholdUpdated')
-        .withArgs(120n);
-      expect(await handler.oracleStalenessThreshold()).to.equal(120n);
+    it('setCollateralStalenessThreshold emits, updates, and guards inputs', async function () {
+      const collAddr = await collateral.getAddress();
+      await expect(
+        handler.connect(outsider).setCollateralStalenessThreshold(collAddr, 120n)
+      ).to.be.revertedWithCustomError(handler, 'AccessControlUnauthorizedAccount');
+      await expect(
+        handler.setCollateralStalenessThreshold(ethers.ZeroAddress, 120n)
+      ).to.be.revertedWithCustomError(handler, 'ZeroAddress');
+      await expect(
+        handler.setCollateralStalenessThreshold(collAddr, 0n)
+      ).to.be.revertedWithCustomError(handler, 'ZeroAmount');
+      await expect(handler.setCollateralStalenessThreshold(collAddr, 120n))
+        .to.emit(handler, 'CollateralStalenessThresholdUpdated')
+        .withArgs(collAddr, 120n);
+      expect(await handler.collateralStalenessThreshold(collAddr)).to.equal(120n);
     });
 
     it('setPriceThreshold caps at 10% (1000 bps)', async function () {
