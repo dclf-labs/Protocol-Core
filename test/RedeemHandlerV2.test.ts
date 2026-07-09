@@ -214,8 +214,13 @@ describe('RedeemHandlerV2', function () {
     it('setCollateralStalenessThreshold emits, updates, and guards inputs', async function () {
       const collAddr = await collateral.getAddress();
       await expect(
-        handler.connect(outsider).setCollateralStalenessThreshold(collAddr, 120n)
-      ).to.be.revertedWithCustomError(handler, 'AccessControlUnauthorizedAccount');
+        handler
+          .connect(outsider)
+          .setCollateralStalenessThreshold(collAddr, 120n)
+      ).to.be.revertedWithCustomError(
+        handler,
+        'AccessControlUnauthorizedAccount'
+      );
       await expect(
         handler.setCollateralStalenessThreshold(ethers.ZeroAddress, 120n)
       ).to.be.revertedWithCustomError(handler, 'ZeroAddress');
@@ -225,7 +230,9 @@ describe('RedeemHandlerV2', function () {
       await expect(handler.setCollateralStalenessThreshold(collAddr, 120n))
         .to.emit(handler, 'CollateralStalenessThresholdUpdated')
         .withArgs(collAddr, 120n);
-      expect(await handler.collateralStalenessThreshold(collAddr)).to.equal(120n);
+      expect(await handler.collateralStalenessThreshold(collAddr)).to.equal(
+        120n
+      );
     });
 
     it('setPriceThreshold caps at 10% (1000 bps)', async function () {
