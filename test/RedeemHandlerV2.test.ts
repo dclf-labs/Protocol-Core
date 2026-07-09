@@ -581,6 +581,37 @@ describe('RedeemHandlerV2', function () {
         handler.connect(burner).redeem(order, signature)
       ).to.be.revertedWithCustomError(handler, 'InvalidOraclePrice');
     });
+
+    it('normalizes feed decimals for the signed redeem path', async function () {
+      // Fix #17: a feed that reports prices in 18 decimals must yield the same collateral
+      // amount as an 8-decimal feed. Before the fix the raw 18-dec answer was fed into the
+      // 8-dec pricing formula and rounded the redemption toward zero / caused a revert.
+      const MockOracleFactory = await ethers.getContractFactory(
+        'MockChainlinkPriceFeed'
+      );
+      const highDecOracle = await MockOracleFactory.deploy(
+        ethers.parseUnits('1', 18),
+        18
+      );
+      await handler.updateCollateralOracle(
+        await collateral.getAddress(),
+        await highDecOracle.getAddress()
+      );
+
+      const order = await makeOrder();
+      const signature = await signOrder(user, order);
+
+      const beforeCol = await collateral.balanceOf(await user.getAddress());
+      await expect(handler.connect(burner).redeem(order, signature)).to.emit(
+        handler,
+        'Redeemed'
+      );
+      // At the peg with the same 100e18 request, user receives 100e18 collateral
+      // regardless of the feed's native precision.
+      expect(await collateral.balanceOf(await user.getAddress())).to.equal(
+        beforeCol + order.collateralAmount
+      );
+    });
   });
 
   describe('redeemWithPermit', function () {
