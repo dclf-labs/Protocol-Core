@@ -228,75 +228,60 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         uint256 usnAmount,
         uint256 minCollateralAmount
     ) external nonReentrant whenNotPaused returns (uint256 queueId) {
-        // Verify user is whitelisted
-        if (!whitelistedUsers[msg.sender]) {
-            revert UserNotWhitelisted(msg.sender);
-        }
-
-        // Verify collateral is redeemable
-        if (!_redeemableCollaterals[collateralAddress]) {
-            revert InvalidCollateralAddress();
-        }
-
-        // Verify price feed exists
-        address priceFeed = priceFeeds[collateralAddress];
-        if (priceFeed == address(0)) {
-            revert PriceFeedNotSet(collateralAddress);
-        }
-
-        if (usnAmount == 0) {
-            revert ZeroAmount();
-        }
-
+        if (!whitelistedUsers[msg.sender]) revert UserNotWhitelisted(msg.sender);
+        if (!_redeemableCollaterals[collateralAddress]) revert InvalidCollateralAddress();
+        if (usnAmount == 0) revert ZeroAmount();
         if (treasury == address(0)) revert TreasuryNotSet();
 
-        uint256 currentAllowance = usnToken.allowance(msg.sender, address(this));
-        if (currentAllowance < usnAmount) revert InsufficientAllowance();
+        uint256 price;
+        {
+            address priceFeed = priceFeeds[collateralAddress];
+            if (priceFeed == address(0)) revert PriceFeedNotSet(collateralAddress);
+            if (usnToken.allowance(msg.sender, address(this)) < usnAmount) revert InsufficientAllowance();
+            price = _getPrice(priceFeed);
+        }
 
-        // Get price from oracle
-        uint256 price = _getPrice(priceFeed);
-
-        // Calculate collateral amount based on price logic
         uint256 collateralAmount = _calculateCollateralAmount(collateralAddress, usnAmount, price);
-
-        // Slippage protection
-        if (collateralAmount < minCollateralAmount) {
-            revert InvalidCollateralAmount(minCollateralAmount, collateralAmount);
+        if (collateralAmount < minCollateralAmount) revert InvalidCollateralAmount(minCollateralAmount, collateralAmount);
+        {
+            uint256 treasuryBalance = IERC20(collateralAddress).balanceOf(treasury);
+            if (treasuryBalance < collateralAmount) {
+                revert InsufficientTreasuryBalance(collateralAddress, collateralAmount, treasuryBalance);
+            }
         }
 
-        // Check treasury has sufficient balance
-        uint256 treasuryBalance = IERC20(collateralAddress).balanceOf(treasury);
-        if (treasuryBalance < collateralAmount) {
-            revert InsufficientTreasuryBalance(collateralAddress, collateralAmount, treasuryBalance);
+        // Split at the current cap: execute what fits and queue only the excess.
+        uint256 immediateUsn;
+        {
+            uint256 available = _availableUnderLimits();
+            immediateUsn = usnAmount <= available ? usnAmount : available;
+        }
+        uint256 queuedUsn = usnAmount - immediateUsn;
+
+        if (immediateUsn > 0) {
+            uint256 immediateCollateral = immediateUsn == usnAmount
+                ? collateralAmount
+                : _calculateCollateralAmount(collateralAddress, immediateUsn, price);
+            _updateLimitCounters(immediateUsn);
+            usnToken.burnFrom(msg.sender, immediateUsn);
+            IERC20(collateralAddress).safeTransferFrom(treasury, msg.sender, immediateCollateral);
+            emit DirectRedeem(msg.sender, immediateUsn, immediateCollateral, collateralAddress, price);
         }
 
-        // Check if limits would be exceeded — queue instead of reverting
-        if (_wouldExceedLimits(usnAmount)) {
-            // QUEUE PATH: just record intent, no token transfer yet
+        if (queuedUsn > 0) {
+            uint256 queuedCollateral = _calculateCollateralAmount(collateralAddress, queuedUsn, price);
             queueId = nextQueueId++;
             queuedRedeems[queueId] = QueuedRedeem({
                 user: msg.sender,
                 collateralAddress: collateralAddress,
-                usnAmount: usnAmount,
-                collateralAmount: collateralAmount,
+                usnAmount: queuedUsn,
+                collateralAmount: queuedCollateral,
                 price: price,
                 queuedAt: block.timestamp,
                 status: QueueStatus.PENDING
             });
-
-            emit RedeemQueued(queueId, msg.sender, collateralAddress, usnAmount, collateralAmount, price);
-            return queueId;
+            emit RedeemQueued(queueId, msg.sender, collateralAddress, queuedUsn, queuedCollateral, price);
         }
-
-        // IMMEDIATE PATH: update counters
-        _updateLimitCounters(usnAmount);
-
-        // Burn USN and transfer collateral
-        usnToken.burnFrom(msg.sender, usnAmount);
-        IERC20(collateralAddress).safeTransferFrom(treasury, msg.sender, collateralAmount);
-
-        emit DirectRedeem(msg.sender, usnAmount, collateralAmount, collateralAddress, price);
-        return 0;
     }
 
     // ============ Queue Functions ============
@@ -554,17 +539,19 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // ============ Internal Functions ============
 
-    function _wouldExceedLimits(uint256 usnAmount) internal view returns (bool) {
-        // Check daily limit
+    function _availableUnderLimits() internal view returns (uint256) {
         uint256 currentDay = block.timestamp / 1 days;
         uint256 dayAmount = currentDay > lastDirectRedeemDay ? 0 : currentDayDirectRedeemAmount;
-        if (dayAmount + usnAmount > directRedeemLimitPerDay) return true;
+        uint256 dailyAvailable = dayAmount >= directRedeemLimitPerDay
+            ? 0
+            : directRedeemLimitPerDay - dayAmount;
 
-        // Check block limit
         uint256 blockAmount = block.number > lastRedeemBlock ? 0 : currentBlockRedeemAmount;
-        if (blockAmount + usnAmount > redeemLimitPerBlock) return true;
+        uint256 blockAvailable = blockAmount >= redeemLimitPerBlock
+            ? 0
+            : redeemLimitPerBlock - blockAmount;
 
-        return false;
+        return dailyAvailable < blockAvailable ? dailyAvailable : blockAvailable;
     }
 
     function _updateLimitCounters(uint256 usnAmount) internal {

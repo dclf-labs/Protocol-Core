@@ -740,8 +740,8 @@ describe('RedeemHandlerV2', function () {
       await usn
         .connect(user)
         .approve(await handler.getAddress(), ethers.MaxUint256);
-      // Force queue path by lowering per-block limit below the redeem
-      await handler.setRedeemLimitPerBlock(ethers.parseUnits('1', 18));
+      // Force queue path by zeroing the per-block limit (nothing fits under it)
+      await handler.setRedeemLimitPerBlock(0n);
     });
 
     it('queues instead of executing when limit would be exceeded', async function () {
@@ -760,6 +760,42 @@ describe('RedeemHandlerV2', function () {
       const q = await handler.getQueuedRedeem(1n);
       expect(q.user).to.equal(await user.getAddress());
       expect(q.usnAmount).to.equal(usnAmount);
+      expect(q.status).to.equal(0n); // PENDING
+    });
+
+    it('splits into immediate + queue when part fits under the limit', async function () {
+      // Lift the block limit so the daily limit is the binding constraint.
+      // Set daily so exactly `available` USN can be redeemed now.
+      const available = ethers.parseUnits('40', 18);
+      await handler.setRedeemLimitPerBlock(
+        ethers.parseUnits('1000000', 18)
+      );
+      await handler.setDirectRedeemLimitPerDay(available);
+
+      const usnAmount = ethers.parseUnits('100', 18);
+      const excess = usnAmount - available;
+
+      const beforeUsn = await usn.balanceOf(await user.getAddress());
+      const beforeCol = await collateral.balanceOf(await user.getAddress());
+
+      const tx = handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), usnAmount, 0n);
+      await expect(tx).to.emit(handler, 'DirectRedeem');
+      await expect(tx).to.emit(handler, 'RedeemQueued');
+
+      // Immediate portion was burnt and settled 1:1 (peg branch)
+      expect(await usn.balanceOf(await user.getAddress())).to.equal(
+        beforeUsn - available
+      );
+      expect(await collateral.balanceOf(await user.getAddress())).to.equal(
+        beforeCol + available
+      );
+
+      // Queue holds only the excess
+      const q = await handler.getQueuedRedeem(1n);
+      expect(q.usnAmount).to.equal(excess);
+      expect(q.collateralAmount).to.equal(excess);
       expect(q.status).to.equal(0n); // PENDING
     });
 
