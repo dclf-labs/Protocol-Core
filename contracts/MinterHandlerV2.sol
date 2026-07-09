@@ -484,6 +484,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Internal functions
     function _transferCollateral(address collateral, address user, uint256 amount) internal {
+        if (custodialWallet == address(0)) revert CustodialWalletNotSet();
         IERC20(collateral).safeTransferFrom(user, custodialWallet, amount);
     }
 
