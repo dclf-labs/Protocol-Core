@@ -767,9 +767,7 @@ describe('RedeemHandlerV2', function () {
       // Lift the block limit so the daily limit is the binding constraint.
       // Set daily so exactly `available` USN can be redeemed now.
       const available = ethers.parseUnits('40', 18);
-      await handler.setRedeemLimitPerBlock(
-        ethers.parseUnits('1000000', 18)
-      );
+      await handler.setRedeemLimitPerBlock(ethers.parseUnits('1000000', 18));
       await handler.setDirectRedeemLimitPerDay(available);
 
       const usnAmount = ethers.parseUnits('100', 18);
