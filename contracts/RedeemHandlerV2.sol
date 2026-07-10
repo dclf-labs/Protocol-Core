@@ -309,6 +309,17 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
         if (block.timestamp > q.queuedAt + QUEUE_EXPIRY) revert QueueExpired(_queueId);
 
+        // Re-validate — state may have changed during the 48h window. If the
+        // user was de-KYB'd, the collateral delisted (e.g. after a depeg), or
+        // the treasury drained, we must not execute at the queue-time price.
+        if (!whitelistedUsers[q.user]) revert UserNotWhitelisted(q.user);
+        if (!_redeemableCollaterals[q.collateralAddress]) revert InvalidCollateralAddress();
+        if (treasury == address(0)) revert TreasuryNotSet();
+        uint256 treasuryBalance = IERC20(q.collateralAddress).balanceOf(treasury);
+        if (treasuryBalance < q.collateralAmount) {
+            revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
+        }
+
         // Enforce daily cap on approved amount.
         uint256 currentDay = block.timestamp / 1 days;
         uint256 dayApproved = currentDay > lastDirectRedeemApprovalDay ? 0 : currentDayDirectRedeemApproved;
