@@ -67,6 +67,7 @@ interface IRedeemHandlerV2 {
     event PriceFeedSet(address indexed collateral, address indexed priceFeed);
     event PriceThresholdUpdated(uint256 newThresholdBps);
     event DirectRedeemLimitUpdated(uint256 newLimit);
+    event MinDirectRedeemAmountUpdated(uint256 newAmount);
     event OracleStalenessThresholdUpdated(uint256 newThreshold);
 
     // ============ Errors ============
@@ -94,6 +95,8 @@ interface IRedeemHandlerV2 {
     error StalePrice(uint256 updatedAt, uint256 currentTime);
     error InvalidPrice(int256 price);
     error DirectRedeemLimitExceeded(uint256 limit, uint256 requested);
+    error DirectRedeemAmountTooSmall(uint256 min, uint256 requested);
+    error InsufficientUserBalance(uint256 required, uint256 available);
     error QueueNotFound(uint256 queueId);
     error QueueNotPending(uint256 queueId);
     error QueueNotExpired(uint256 queueId);
@@ -135,6 +138,7 @@ interface IRedeemHandlerV2 {
     function setPriceFeed(address collateral, address priceFeed) external;
     function setPriceThreshold(uint256 thresholdBps) external;
     function setDirectRedeemLimitPerDay(uint256 limit) external;
+    function setMinDirectRedeemAmount(uint256 amount) external;
     function setOracleStalenessThreshold(uint256 threshold) external;
     function addWhitelistedUser(address user) external;
     function removeWhitelistedUser(address user) external;
@@ -154,6 +158,7 @@ interface IRedeemHandlerV2 {
     function directRedeemLimitPerDay() external view returns (uint256);
     function currentDayDirectRedeemApproved() external view returns (uint256);
     function lastDirectRedeemApprovalDay() external view returns (uint256);
+    function minDirectRedeemAmount() external view returns (uint256);
     function oracleStalenessThreshold() external view returns (uint256);
     function nextQueueId() external view returns (uint256);
     function QUEUE_EXPIRY() external view returns (uint256);

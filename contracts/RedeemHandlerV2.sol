@@ -62,6 +62,9 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     uint256 public currentDayDirectRedeemApproved;
     uint256 public lastDirectRedeemApprovalDay;
 
+    // Minimum USN amount for a direct redeem — prevents dust queue spam.
+    uint256 public minDirectRedeemAmount;
+
     // Mappings
     mapping(address => bool) public whitelistedUsers;
     mapping(address => bool) private _redeemableCollaterals;
@@ -84,6 +87,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         redeemLimitPerBlock = 1000000 * 10 ** 18; // Default limit: 1 million USN
         directRedeemLimitPerDay = 100000 * 10 ** 18; // Default: 100k USN per day of approved direct redeems
+        minDirectRedeemAmount = 1e18; // Default: 1 USN — blocks dust queue spam
     }
 
     // ============ External Functions ============
@@ -252,14 +256,10 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        if (usnAmount == 0) {
-            revert ZeroAmount();
-        }
-
         if (treasury == address(0)) revert TreasuryNotSet();
 
-        uint256 currentAllowance = usnToken.allowance(msg.sender, address(this));
-        if (currentAllowance < usnAmount) revert InsufficientAllowance();
+        // Amount / balance / allowance / min-size checks.
+        _antiSpamCheck(msg.sender, usnAmount);
 
         // Get price from oracle
         uint256 price = _getPrice(priceFeed);
@@ -484,6 +484,16 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     /**
+     * @notice Set the minimum USN amount accepted by `directRedeem`
+     * @dev Guards the queue from dust spam. Setting to 0 disables the min check
+     *      (zero-amount calls still revert via ZeroAmount).
+     */
+    function setMinDirectRedeemAmount(uint256 _min) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        minDirectRedeemAmount = _min;
+        emit MinDirectRedeemAmountUpdated(_min);
+    }
+
+    /**
      * @notice Pause redeem entry points (`redeem`, `redeemWithPermit`, `directRedeem`, `approveQueuedRedeem`).
      * @dev Admin recovery paths (reject/cancel/reclaim) remain callable while paused.
      */
@@ -563,6 +573,27 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     // ============ Internal Functions ============
+
+    /**
+     * @notice Anti-spam gate applied to `directRedeem` at queue time.
+     * @dev Enforces the four cheap conditions that make a queued redeem plausibly executable
+     *      — non-zero amount, meets the configurable min-size, user actually holds the USN,
+     *      user has approved this contract to burn it. This prevents an attacker from
+     *      spamming the queue with entries that can never be approved (approver would just
+     *      waste gas on failing `burnFrom`).
+     */
+    function _antiSpamCheck(address user, uint256 usnAmount) internal view {
+        if (usnAmount == 0) revert ZeroAmount();
+        if (usnAmount < minDirectRedeemAmount) {
+            revert DirectRedeemAmountTooSmall(minDirectRedeemAmount, usnAmount);
+        }
+        uint256 balance = usnToken.balanceOf(user);
+        if (balance < usnAmount) {
+            revert InsufficientUserBalance(usnAmount, balance);
+        }
+        uint256 currentAllowance = usnToken.allowance(user, address(this));
+        if (currentAllowance < usnAmount) revert InsufficientAllowance();
+    }
 
     /**
      * @notice Calculate collateral amount using oracle price directly (for signed redeems)
