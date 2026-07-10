@@ -152,7 +152,8 @@ interface IRedeemHandlerV2 {
     function priceFeeds(address collateral) external view returns (address);
     function priceThresholdBps() external view returns (uint256);
     function directRedeemLimitPerDay() external view returns (uint256);
-    function currentDayDirectRedeemAmount() external view returns (uint256);
+    function currentDayDirectRedeemApproved() external view returns (uint256);
+    function lastDirectRedeemApprovalDay() external view returns (uint256);
     function oracleStalenessThreshold() external view returns (uint256);
     function nextQueueId() external view returns (uint256);
     function QUEUE_EXPIRY() external view returns (uint256);
