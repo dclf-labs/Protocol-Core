@@ -27,6 +27,7 @@ interface IMinterHandlerV2 {
     // Errors for direct mint
     error PriceFeedNotSet(address collateral);
     error StalePrice(uint256 updatedAt, uint256 currentTime);
+    error StalenessThresholdNotSet(address collateral);
     error InvalidPrice(int256 price);
     error DirectMintLimitExceeded(uint256 limit, uint256 requested);
     error SUSNVaultNotSet();
@@ -46,7 +47,7 @@ interface IMinterHandlerV2 {
     event PriceFeedSet(address indexed collateral, address indexed priceFeed);
     event PriceThresholdUpdated(uint256 newThresholdBps);
     event DirectMintLimitUpdated(uint256 newLimit);
-    event OracleStalenessThresholdUpdated(uint256 newThreshold);
+    event CollateralStalenessThresholdUpdated(address indexed collateral, uint256 newThreshold);
     event SUSNVaultSet(address indexed sUSNVault);
     event MintAndRebase(uint256 amount);
     event RebaseLimitUpdated(uint256 newLimit);

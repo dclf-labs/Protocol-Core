@@ -60,7 +60,6 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
     uint256 public directMintLimitPerDay;
     uint256 public currentDayDirectMintAmount;
     uint256 public lastDirectMintDay;
-    uint256 public oracleStalenessThreshold = 1 hours;
 
     // Mappings
     mapping(address => bool) public whitelistedUsers;
@@ -69,6 +68,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Oracle mappings (collateral => Chainlink price feed)
     mapping(address => address) public priceFeeds;
+    mapping(address => uint256) public collateralStalenessThreshold;
 
 
     // Constructor
@@ -232,7 +232,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         }
 
         // Get price from oracle
-        uint256 price = _getPrice(priceFeed);
+        uint256 price = _getPrice(collateralAddress, priceFeed);
 
         // Calculate USN amount based on price logic
         uint256 usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, price);
@@ -290,7 +290,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        priceUsed = _getPrice(priceFeed);
+        priceUsed = _getPrice(collateralAddress, priceFeed);
         usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, priceUsed);
     }
 
@@ -341,7 +341,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
     /**
      * @notice Get price from Chainlink oracle
      */
-    function _getPrice(address priceFeed) internal view returns (uint256) {
+    function _getPrice(address collateral, address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
 
         (
@@ -351,8 +351,11 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
             uint256 updatedAt,
         ) = oracle.latestRoundData();
 
-        // Check staleness
-        if (block.timestamp - updatedAt > oracleStalenessThreshold) {
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) {
+            revert StalenessThresholdNotSet(collateral);
+        }
+        if (block.timestamp - updatedAt > threshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
 
@@ -404,13 +407,14 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         emit DirectMintLimitUpdated(_limit);
     }
 
-    /**
-     * @notice Set oracle staleness threshold
-     * @param _threshold Staleness threshold in seconds
-     */
-    function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        oracleStalenessThreshold = _threshold;
-        emit OracleStalenessThresholdUpdated(_threshold);
+    function setCollateralStalenessThreshold(address collateral, uint256 _threshold)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (collateral == address(0)) revert ZeroAddress();
+        if (_threshold == 0) revert ZeroAmount();
+        collateralStalenessThreshold[collateral] = _threshold;
+        emit CollateralStalenessThresholdUpdated(collateral, _threshold);
     }
 
     /**
