@@ -144,17 +144,6 @@ contract StakingVaultOFTUpgradeableHyperlane is
         emit TokenRescued(address(token), to, amount);
     }
 
-    function rebaseWithPermit(
-        uint256 amount,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external onlyRole(REBASE_MANAGER_ROLE) {
-        try IERC20Permit(address(asset())).permit(msg.sender, address(this), amount, deadline, v, r, s) {} catch {}
-        rebase(amount);
-    }
-
     function rebase(uint256 _amount) public onlyRole(REBASE_MANAGER_ROLE) nonReentrant whenNotPaused {
         if (_amount == 0) revert CannotSetZero();
         if (totalSupply() == 0) revert NoSharesMinted();
@@ -229,6 +218,12 @@ contract StakingVaultOFTUpgradeableHyperlane is
     function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
         StakingVaultStorage storage s = getStakingVaultStorage();
         if (shares == 0) revert ZeroAmount();
+
+        // If user is whitelisted, allow direct redemption
+        if (s.whitelist[msg.sender]) {
+            if (receiver == s.withdrawalHandler) revert Unauthorized();
+            return super.redeem(shares, receiver, owner);
+        }
         if (receiver != s.withdrawalHandler) revert Unauthorized();
         uint256 assets = previewRedeem(shares);
         createWithdrawalDemand(assets);

@@ -55,7 +55,6 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Direct redeem config
     uint256 public priceThresholdBps = 100; // 1% = 100 bps (0.99 - 1.01)
-    uint256 public oracleStalenessThreshold = 1 hours;
 
     // Daily cap enforced at approval time (approver-side rate limit).
     uint256 public directRedeemLimitPerDay;
@@ -72,6 +71,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Oracle mappings (collateral => Chainlink price feed)
     mapping(address => address) public priceFeeds;
+    mapping(address => uint256) public collateralStalenessThreshold;
 
     // Queue system
     uint256 public nextQueueId = 1; // starts at 1 so 0 means "not queued"
@@ -262,7 +262,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         _antiSpamCheck(msg.sender, usnAmount);
 
         // Get price from oracle
-        uint256 price = _getPrice(priceFeed);
+        uint256 price = _getPrice(collateralAddress, priceFeed);
 
         // Calculate collateral amount based on price logic
         uint256 collateralAmount = _calculateCollateralAmount(collateralAddress, usnAmount, price);
@@ -400,7 +400,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        priceUsed = _getPrice(priceFeed);
+        priceUsed = _getPrice(collateralAddress, priceFeed);
         collateralAmount = _calculateCollateralAmount(collateralAddress, usnAmount, priceUsed);
     }
 
@@ -475,15 +475,6 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     /**
-     * @notice Set oracle staleness threshold
-     * @param _threshold Staleness threshold in seconds
-     */
-    function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        oracleStalenessThreshold = _threshold;
-        emit OracleStalenessThresholdUpdated(_threshold);
-    }
-
-    /**
      * @notice Set the daily cap on approved direct redeem amount
      * @dev Restricted to DEFAULT_ADMIN_ROLE. APPROVER_ROLE (which consumes the cap in
      *      `approveQueuedRedeem`) is intentionally excluded so approvers cannot raise
@@ -502,6 +493,16 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     function setMinDirectRedeemAmount(uint256 _min) external onlyRole(DEFAULT_ADMIN_ROLE) {
         minDirectRedeemAmount = _min;
         emit MinDirectRedeemAmountUpdated(_min);
+    }
+
+    function setCollateralStalenessThreshold(address collateral, uint256 _threshold)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (collateral == address(0)) revert ZeroAddress();
+        if (_threshold == 0) revert ZeroAmount();
+        collateralStalenessThreshold[collateral] = _threshold;
+        emit CollateralStalenessThresholdUpdated(collateral, _threshold);
     }
 
     /**
@@ -563,8 +564,10 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         (, int256 answer, , uint256 updatedAt_, ) = oracle.latestRoundData();
 
         if (answer <= 0) revert InvalidOraclePrice(answer);
-        if (block.timestamp - updatedAt_ > oracleStalenessThreshold) {
-            revert StaleOracleData(updatedAt_, oracleStalenessThreshold);
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) revert StalenessThresholdNotSet(collateral);
+        if (block.timestamp - updatedAt_ > threshold) {
+            revert StaleOracleData(updatedAt_, threshold);
         }
 
         return (answer, updatedAt_);
@@ -611,8 +614,8 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
      * @dev Uses max(price, pegPrice) to protect the protocol
      */
     function _calculateCollateralFromOracle(address collateral, uint256 usnAmount) internal view returns (uint256) {
-        (int256 price, ) = getCollateralPrice(collateral);
-        uint256 collateralPrice = uint256(price);
+        (int256 rawPrice, ) = getCollateralPrice(collateral);
+        uint256 collateralPrice = _normalizeFeedAnswer(priceFeeds[collateral], uint256(rawPrice));
         uint256 collDecimals = IERC20Metadata(collateral).decimals();
 
         // Use the higher of actual price vs peg to protect the protocol
@@ -628,38 +631,33 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         return baseCollateralAmount;
     }
 
+    function _normalizeFeedAnswer(address priceFeed, uint256 rawAnswer) internal view returns (uint256) {
+        uint8 feedDecimals = IChainlinkPriceFeed(priceFeed).decimals();
+        if (feedDecimals == 8) return rawAnswer;
+        if (feedDecimals < 8) return rawAnswer * 10 ** (8 - feedDecimals);
+        return rawAnswer / 10 ** (feedDecimals - 8);
+    }
+
     /**
      * @notice Get price from Chainlink oracle
      */
-    function _getPrice(address priceFeed) internal view returns (uint256) {
+    function _getPrice(address collateral, address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
 
-        (
-            ,
-            int256 answer,
-            ,
-            uint256 updatedAt,
-        ) = oracle.latestRoundData();
+        (, int256 answer, , uint256 updatedAt, ) = oracle.latestRoundData();
 
-        // Check staleness
-        if (block.timestamp - updatedAt > oracleStalenessThreshold) {
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) {
+            revert StalenessThresholdNotSet(collateral);
+        }
+        if (block.timestamp - updatedAt > threshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
-
-        // Check valid price
         if (answer <= 0) {
             revert InvalidPrice(answer);
         }
 
-        // Normalize to 8 decimals (standard Chainlink precision)
-        uint8 feedDecimals = oracle.decimals();
-        if (feedDecimals == 8) {
-            return uint256(answer);
-        } else if (feedDecimals < 8) {
-            return uint256(answer) * 10 ** (8 - feedDecimals);
-        } else {
-            return uint256(answer) / 10 ** (feedDecimals - 8);
-        }
+        return _normalizeFeedAnswer(priceFeed, uint256(answer));
     }
 
     function _isValidSignature(address signer, bytes32 hash, bytes memory signature) internal view returns (bool) {
