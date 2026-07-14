@@ -55,7 +55,6 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     uint256 public directRedeemLimitPerDay;
     uint256 public currentDayDirectRedeemAmount;
     uint256 public lastDirectRedeemDay;
-    uint256 public oracleStalenessThreshold = 1 hours;
 
     // Mappings
     mapping(address => bool) public whitelistedUsers;
@@ -64,6 +63,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Oracle mappings (collateral => Chainlink price feed)
     mapping(address => address) public priceFeeds;
+    mapping(address => uint256) public collateralStalenessThreshold;
 
     // Queue system
     uint256 public nextQueueId = 1; // starts at 1 so 0 means "not queued"
@@ -254,7 +254,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         if (currentAllowance < usnAmount) revert InsufficientAllowance();
 
         // Get price from oracle
-        uint256 price = _getPrice(priceFeed);
+        uint256 price = _getPrice(collateralAddress, priceFeed);
 
         // Calculate collateral amount based on price logic
         uint256 collateralAmount = _calculateCollateralAmount(collateralAddress, usnAmount, price);
@@ -310,6 +310,21 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         if (q.queuedAt == 0) revert QueueNotFound(_queueId);
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
         if (block.timestamp > q.queuedAt + QUEUE_EXPIRY) revert QueueExpired(_queueId);
+
+        // Re-validate the queue entry — state may have changed since it was queued.
+        if (!whitelistedUsers[q.user]) revert UserNotWhitelisted(q.user);
+        if (!_redeemableCollaterals[q.collateralAddress]) revert InvalidCollateralAddress();
+        if (treasury == address(0)) revert TreasuryNotSet();
+
+        uint256 treasuryBalance = IERC20(q.collateralAddress).balanceOf(treasury);
+        if (treasuryBalance < q.collateralAmount) {
+            revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
+        }
+
+        if (_wouldExceedLimits(q.usnAmount)) {
+            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, q.usnAmount);
+        }
+        _updateLimitCounters(q.usnAmount);
 
         q.status = QueueStatus.APPROVED;
 
@@ -381,7 +396,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        priceUsed = _getPrice(priceFeed);
+        priceUsed = _getPrice(collateralAddress, priceFeed);
         collateralAmount = _calculateCollateralAmount(collateralAddress, usnAmount, priceUsed);
     }
 
@@ -464,13 +479,14 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         emit DirectRedeemLimitUpdated(_limit);
     }
 
-    /**
-     * @notice Set oracle staleness threshold
-     * @param _threshold Staleness threshold in seconds
-     */
-    function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        oracleStalenessThreshold = _threshold;
-        emit OracleStalenessThresholdUpdated(_threshold);
+    function setCollateralStalenessThreshold(address collateral, uint256 _threshold)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (collateral == address(0)) revert ZeroAddress();
+        if (_threshold == 0) revert ZeroAmount();
+        collateralStalenessThreshold[collateral] = _threshold;
+        emit CollateralStalenessThresholdUpdated(collateral, _threshold);
     }
 
     /**
@@ -532,8 +548,10 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         (, int256 answer, , uint256 updatedAt_, ) = oracle.latestRoundData();
 
         if (answer <= 0) revert InvalidOraclePrice(answer);
-        if (block.timestamp - updatedAt_ > oracleStalenessThreshold) {
-            revert StaleOracleData(updatedAt_, oracleStalenessThreshold);
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) revert StalenessThresholdNotSet(collateral);
+        if (block.timestamp - updatedAt_ > threshold) {
+            revert StaleOracleData(updatedAt_, threshold);
         }
 
         return (answer, updatedAt_);
@@ -614,12 +632,16 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     /**
      * @notice Get price from Chainlink oracle
      */
-    function _getPrice(address priceFeed) internal view returns (uint256) {
+    function _getPrice(address collateral, address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
 
         (, int256 answer, , uint256 updatedAt, ) = oracle.latestRoundData();
 
-        if (block.timestamp - updatedAt > oracleStalenessThreshold) {
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) {
+            revert StalenessThresholdNotSet(collateral);
+        }
+        if (block.timestamp - updatedAt > threshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
         if (answer <= 0) {

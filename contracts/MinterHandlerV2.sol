@@ -5,14 +5,11 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import "@openzeppelin/contracts/interfaces/IERC1271.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./interfaces/IUSN.sol";
 import "./interfaces/IMinterHandlerV2.sol";
 import "./interfaces/ISUSNVault.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /**
  * @title IChainlinkPriceFeed
@@ -29,16 +26,12 @@ interface IChainlinkPriceFeed {
     function decimals() external view returns (uint8);
 }
 
-contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessControl, EIP712 {
+contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessControl {
     using SafeERC20 for IERC20;
 
     // Constants
     /// @dev MINTER_ROLE can be granted to any address, including multisig wallets (e.g. Gnosis Safe).
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
-    bytes32 private constant ORDER_TYPEHASH =
-        keccak256(
-            "Order(string message,address user,address collateralAddress,uint256 collateralAmount,uint256 usnAmount,uint256 expiry,uint256 nonce)"
-        );
 
     // Price constants (8 decimals to match Chainlink)
     uint256 public constant PRICE_PRECISION = 1e8;
@@ -60,19 +53,18 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
     uint256 public directMintLimitPerDay;
     uint256 public currentDayDirectMintAmount;
     uint256 public lastDirectMintDay;
-    uint256 public oracleStalenessThreshold = 1 hours;
 
     // Mappings
     mapping(address => bool) public whitelistedUsers;
     mapping(address => bool) public whitelistedCollaterals;
-    mapping(address => mapping(uint256 => bool)) private usedNonces;
 
     // Oracle mappings (collateral => Chainlink price feed)
     mapping(address => address) public priceFeeds;
+    mapping(address => uint256) public collateralStalenessThreshold;
 
 
     // Constructor
-    constructor(address _usnToken) EIP712("MinterHandlerV2", "1") {
+    constructor(address _usnToken) {
         if (_usnToken == address(0)) {
             revert ZeroAddress();
         }
@@ -131,71 +123,6 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         emit MintAndRebase(amount);
     }
 
-    function mint(Order calldata order, bytes calldata signature) external nonReentrant whenNotPaused onlyRole(MINTER_ROLE) {
-        if (!whitelistedUsers[order.user]) {
-            revert UserNotWhitelisted(order.user);
-        }
-        if (!whitelistedCollaterals[order.collateralAddress]) {
-            revert CollateralNotWhitelisted(order.collateralAddress);
-        }
-        if (block.timestamp > order.expiry) {
-            revert SignatureExpired(order.expiry, block.timestamp);
-        }
-        if (usedNonces[order.user][order.nonce]) {
-            revert NonceAlreadyUsed(order.user, order.nonce);
-        }
-        if ((order.collateralAmount == 0 || order.usnAmount == 0) && order.user != msg.sender) {
-            revert ZeroAmount();
-        }
-
-        if (order.user != msg.sender) {
-            uint256 collateralDecimals = IERC20Metadata(order.collateralAddress).decimals();
-            uint256 usnDecimals = usnToken.decimals();
-
-            uint256 normalizedCollateralAmount = order.collateralAmount * 10 ** (18 - collateralDecimals);
-            uint256 normalizedUsnAmount = order.usnAmount * 10 ** (18 - usnDecimals);
-
-            uint256 difference;
-            if (normalizedCollateralAmount > normalizedUsnAmount) {
-                difference = normalizedCollateralAmount - normalizedUsnAmount;
-            } else {
-                difference = normalizedUsnAmount - normalizedCollateralAmount;
-            }
-
-            // Calculate 2% of the larger amount
-            uint256 twoPercent = (
-                normalizedCollateralAmount > normalizedUsnAmount ? normalizedCollateralAmount : normalizedUsnAmount
-            ) / 50;
-
-            if (difference > twoPercent) {
-                revert CollateralUsnMismatch(order.collateralAmount, order.usnAmount);
-            }
-        }
-
-        bytes32 hash = hashOrder(order);
-
-        if (!_isValidSignature(order.user, hash, signature)) {
-            revert InvalidSignature();
-        }
-
-        if (block.number > lastMintBlock) {
-            currentBlockMintAmount = 0;
-            lastMintBlock = block.number;
-        }
-
-        if (currentBlockMintAmount + order.usnAmount > mintLimitPerBlock) {
-            revert MintLimitExceeded(mintLimitPerBlock, currentBlockMintAmount + order.usnAmount);
-        }
-
-        usedNonces[order.user][order.nonce] = true;
-        usnToken.mint(order.user, order.usnAmount);
-        currentBlockMintAmount += order.usnAmount;
-
-        _transferCollateral(order.collateralAddress, order.user, order.collateralAmount);
-
-        emit Mint(order.user, order.collateralAmount, order.usnAmount, order.collateralAddress);
-    }
-
     /**
      * @notice Direct mint function - allows whitelisted users to mint USN directly without MINTER_ROLE
      * @dev Uses Chainlink price feeds to determine the exchange rate
@@ -232,7 +159,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         }
 
         // Get price from oracle
-        uint256 price = _getPrice(priceFeed);
+        uint256 price = _getPrice(collateralAddress, priceFeed);
 
         // Calculate USN amount based on price logic
         uint256 usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, price);
@@ -290,7 +217,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        priceUsed = _getPrice(priceFeed);
+        priceUsed = _getPrice(collateralAddress, priceFeed);
         usnAmount = _calculateUsnAmount(collateralAddress, collateralAmount, priceUsed);
     }
 
@@ -341,7 +268,7 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
     /**
      * @notice Get price from Chainlink oracle
      */
-    function _getPrice(address priceFeed) internal view returns (uint256) {
+    function _getPrice(address collateral, address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
 
         (
@@ -351,8 +278,11 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
             uint256 updatedAt,
         ) = oracle.latestRoundData();
 
-        // Check staleness
-        if (block.timestamp - updatedAt > oracleStalenessThreshold) {
+        uint256 threshold = collateralStalenessThreshold[collateral];
+        if (threshold == 0) {
+            revert StalenessThresholdNotSet(collateral);
+        }
+        if (block.timestamp - updatedAt > threshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
 
@@ -404,17 +334,18 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         emit DirectMintLimitUpdated(_limit);
     }
 
-    /**
-     * @notice Set oracle staleness threshold
-     * @param _threshold Staleness threshold in seconds
-     */
-    function setOracleStalenessThreshold(uint256 _threshold) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        oracleStalenessThreshold = _threshold;
-        emit OracleStalenessThresholdUpdated(_threshold);
+    function setCollateralStalenessThreshold(address collateral, uint256 _threshold)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (collateral == address(0)) revert ZeroAddress();
+        if (_threshold == 0) revert ZeroAmount();
+        collateralStalenessThreshold[collateral] = _threshold;
+        emit CollateralStalenessThresholdUpdated(collateral, _threshold);
     }
 
     /**
-     * @notice Pause mint entry points (`mint`, `mintAndRebase`, `directMint`).
+     * @notice Pause mint entry points (`mintAndRebase`, `directMint`).
      * @dev Admin configuration setters remain callable while paused.
      */
     function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -463,41 +394,9 @@ contract MinterHandlerV2 is IMinterHandlerV2, ReentrancyGuard, Pausable, AccessC
         emit WhitelistedCollateralRemoved(collateral);
     }
 
-    // Public functions
-    function hashOrder(Order calldata order) public view returns (bytes32) {
-        return _hashTypedDataV4(keccak256(encodeOrder(order)));
-    }
-
-    function encodeOrder(Order calldata order) public pure returns (bytes memory) {
-        return
-            abi.encode(
-                ORDER_TYPEHASH,
-                keccak256(bytes(order.message)), // Hashing the message to ensure consistent encoding and fixed length
-                order.user,
-                order.collateralAddress,
-                order.collateralAmount,
-                order.usnAmount,
-                order.expiry,
-                order.nonce
-            );
-    }
-
     // Internal functions
     function _transferCollateral(address collateral, address user, uint256 amount) internal {
+        if (custodialWallet == address(0)) revert CustodialWalletNotSet();
         IERC20(collateral).safeTransferFrom(user, custodialWallet, amount);
-    }
-
-    function _isValidSignature(address signer, bytes32 hash, bytes memory signature) internal view returns (bool) {
-        if (signer.code.length == 0) {
-            // EOA
-            return ECDSA.recover(hash, signature) == signer;
-        } else {
-            // Contract wallet
-            try IERC1271(signer).isValidSignature(hash, signature) returns (bytes4 magicValue) {
-                return magicValue == IERC1271.isValidSignature.selector;
-            } catch {
-                return false;
-            }
-        }
     }
 }
