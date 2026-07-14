@@ -18,6 +18,7 @@ interface IMinterHandlerV2 {
     error InvalidPrice(int256 price);
     error DirectMintLimitExceeded(uint256 limit, uint256 requested);
     error SUSNVaultNotSet();
+    error CustodialWalletNotSet();
     error CannotSetZero();
     error RebaseLimitExceeded(uint256 limit, uint256 requested);
 
