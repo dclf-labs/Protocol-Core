@@ -605,8 +605,8 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
      * @dev Uses max(price, pegPrice) to protect the protocol
      */
     function _calculateCollateralFromOracle(address collateral, uint256 usnAmount) internal view returns (uint256) {
-        (int256 price, ) = getCollateralPrice(collateral);
-        uint256 collateralPrice = uint256(price);
+        (int256 rawPrice, ) = getCollateralPrice(collateral);
+        uint256 collateralPrice = _normalizeFeedAnswer(priceFeeds[collateral], uint256(rawPrice));
         uint256 collDecimals = IERC20Metadata(collateral).decimals();
 
         // Use the higher of actual price vs peg to protect the protocol
@@ -622,18 +622,20 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         return baseCollateralAmount;
     }
 
+    function _normalizeFeedAnswer(address priceFeed, uint256 rawAnswer) internal view returns (uint256) {
+        uint8 feedDecimals = IChainlinkPriceFeed(priceFeed).decimals();
+        if (feedDecimals == 8) return rawAnswer;
+        if (feedDecimals < 8) return rawAnswer * 10 ** (8 - feedDecimals);
+        return rawAnswer / 10 ** (feedDecimals - 8);
+    }
+
     /**
      * @notice Get price from Chainlink oracle
      */
     function _getPrice(address collateral, address priceFeed) internal view returns (uint256) {
         IChainlinkPriceFeed oracle = IChainlinkPriceFeed(priceFeed);
 
-        (
-            ,
-            int256 answer,
-            ,
-            uint256 updatedAt,
-        ) = oracle.latestRoundData();
+        (, int256 answer, , uint256 updatedAt, ) = oracle.latestRoundData();
 
         uint256 threshold = collateralStalenessThreshold[collateral];
         if (threshold == 0) {
@@ -642,21 +644,11 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         if (block.timestamp - updatedAt > threshold) {
             revert StalePrice(updatedAt, block.timestamp);
         }
-
-        // Check valid price
         if (answer <= 0) {
             revert InvalidPrice(answer);
         }
 
-        // Normalize to 8 decimals (standard Chainlink precision)
-        uint8 feedDecimals = oracle.decimals();
-        if (feedDecimals == 8) {
-            return uint256(answer);
-        } else if (feedDecimals < 8) {
-            return uint256(answer) * 10 ** (8 - feedDecimals);
-        } else {
-            return uint256(answer) / 10 ** (feedDecimals - 8);
-        }
+        return _normalizeFeedAnswer(priceFeed, uint256(answer));
     }
 
     function _isValidSignature(address signer, bytes32 hash, bytes memory signature) internal view returns (bool) {
