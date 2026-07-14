@@ -4,13 +4,17 @@ import { ethers } from 'hardhat';
 import type {
   USN,
   RedeemHandlerV2,
+  MinterHandlerV2,
   MockERC20,
   MockChainlinkPriceFeed,
+  MockFlashAttacker,
   EndpointV2Mock,
 } from '../typechain-types';
 
 const ONE_USD = 10n ** 8n; // Chainlink 8-decimals peg
-const QUEUE_EXPIRY = 24 * 60 * 60;
+const QUEUE_EXPIRY = 48 * 60 * 60;
+const DEFAULT_MIN_DIRECT_REDEEM = 10n ** 18n;
+const DEFAULT_DAILY_APPROVAL_CAP = 100_000n * 10n ** 18n;
 
 async function latestTimestamp(): Promise<number> {
   const block = await ethers.provider.getBlock('latest');
@@ -35,6 +39,7 @@ interface RedeemOrder {
 describe('RedeemHandlerV2', function () {
   let usn: USN;
   let handler: RedeemHandlerV2;
+  let minter: MinterHandlerV2;
   let collateral: MockERC20;
   let oracle: MockChainlinkPriceFeed;
   let endpointMock: EndpointV2Mock;
@@ -122,6 +127,12 @@ describe('RedeemHandlerV2', function () {
       await handler.BURNER_ROLE(),
       await burner.getAddress()
     );
+    // Owner needs APPROVER_ROLE for the existing approve/reject tests to keep
+    // working without threading a new signer through every call.
+    await handler.grantRole(
+      await handler.APPROVER_ROLE(),
+      await owner.getAddress()
+    );
     await handler.addRedeemableCollateral(
       await collateral.getAddress(),
       await oracle.getAddress()
@@ -142,6 +153,28 @@ describe('RedeemHandlerV2', function () {
     await collateral
       .connect(treasury)
       .approve(await handler.getAddress(), ethers.MaxUint256);
+
+    // Minter handler wired so the fixture can model the #13 cycling attack.
+    // custodialWallet == treasury: collateral moved into treasury on mint is
+    // the same pool the redeem handler pulls from, which is the assumption
+    // the auditor's PoC relies on.
+    const MinterHandlerV2Factory =
+      await ethers.getContractFactory('MinterHandlerV2');
+    minter = await MinterHandlerV2Factory.deploy(await usn.getAddress());
+    await minter.setCustodialWallet(await treasury.getAddress());
+    await minter.setPriceFeed(
+      await collateral.getAddress(),
+      await oracle.getAddress()
+    );
+    await minter.addWhitelistedCollateral(await collateral.getAddress());
+    await minter.setCollateralStalenessThreshold(
+      await collateral.getAddress(),
+      3600n
+    );
+    await minter.addWhitelistedUser(await user.getAddress());
+    // USN's mint() is admin-gated. Owner remains admin (needed by other tests
+    // that seed USN); tests that call minter.directMint must transfer USN
+    // admin to the minter temporarily.
 
     domain = {
       name: 'RedeemHandlerV2',
@@ -684,18 +717,29 @@ describe('RedeemHandlerV2', function () {
         .approve(await handler.getAddress(), ethers.MaxUint256);
     });
 
-    it('burns USN, sends collateral, emits DirectRedeem', async function () {
+    it('queues the request without burning or transferring', async function () {
       const usnAmount = ethers.parseUnits('100', 18);
-      const tx = handler
-        .connect(user)
-        .directRedeem(await collateral.getAddress(), usnAmount, 0n);
-
-      await expect(tx).to.emit(handler, 'DirectRedeem');
-      const block = await ethers.provider.getBlock('latest');
-      expect(await usn.balanceOf(await user.getAddress())).to.equal(
-        userInitialUSN - usnAmount
+      const usnBefore = await usn.balanceOf(await user.getAddress());
+      const colBefore = await collateral.balanceOf(await user.getAddress());
+      const treasuryBefore = await collateral.balanceOf(
+        await treasury.getAddress()
       );
-      expect(block!.number).to.be.greaterThan(0);
+
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), usnAmount, 0n)
+      ).to.emit(handler, 'RedeemQueued');
+
+      // No burn, no transfer until an approver acts on the queue entry.
+      expect(await usn.balanceOf(await user.getAddress())).to.equal(usnBefore);
+      expect(await collateral.balanceOf(await user.getAddress())).to.equal(
+        colBefore
+      );
+      expect(await collateral.balanceOf(await treasury.getAddress())).to.equal(
+        treasuryBefore
+      );
+      expect(await handler.nextQueueId()).to.equal(2n);
     });
 
     it('reverts on non-whitelisted user', async function () {
@@ -1016,6 +1060,631 @@ describe('RedeemHandlerV2', function () {
       const hash = await handler.hashOrder(order);
       expect(encoded).to.be.a('string');
       expect(hash).to.match(/^0x[0-9a-f]{64}$/i);
+    });
+  });
+
+  // ============================================================
+  // Gap coverage for the mechanism the PR introduces (as opposed to the
+  // attack-regression tests further below, which prove the bug is dead).
+  // ============================================================
+
+  describe('directRedeem: minimum amount (anti-spam)', function () {
+    beforeEach(async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+    });
+
+    it('reverts when usnAmount < minDirectRedeemAmount', async function () {
+      const belowMin = ethers.parseUnits('0.1', 18); // < 1 USN default min
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), belowMin, 0n)
+      )
+        .to.be.revertedWithCustomError(handler, 'DirectRedeemAmountTooSmall')
+        .withArgs(DEFAULT_MIN_DIRECT_REDEEM, belowMin);
+    });
+
+    it('accepts usnAmount == minDirectRedeemAmount (boundary)', async function () {
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(
+            await collateral.getAddress(),
+            DEFAULT_MIN_DIRECT_REDEEM,
+            0n
+          )
+      ).to.emit(handler, 'RedeemQueued');
+    });
+
+    it('setMinDirectRedeemAmount is DEFAULT_ADMIN_ROLE only and emits event', async function () {
+      await expect(
+        handler.connect(outsider).setMinDirectRedeemAmount(5n)
+      ).to.be.revertedWithCustomError(
+        handler,
+        'AccessControlUnauthorizedAccount'
+      );
+      await expect(handler.setMinDirectRedeemAmount(5n))
+        .to.emit(handler, 'MinDirectRedeemAmountUpdated')
+        .withArgs(5n);
+      expect(await handler.minDirectRedeemAmount()).to.equal(5n);
+    });
+
+    it('setting min to 0 disables the min check but zero still reverts', async function () {
+      await handler.setMinDirectRedeemAmount(0n);
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), 0n, 0n)
+      ).to.be.revertedWithCustomError(handler, 'ZeroAmount');
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), 1n, 0n)
+      ).to.emit(handler, 'RedeemQueued');
+    });
+  });
+
+  describe('directRedeem: balance / allowance checks (anti-spam)', function () {
+    it('reverts InsufficientUserBalance when balance < usnAmount even with allowance', async function () {
+      await handler.addWhitelistedUser(await outsider.getAddress());
+      await usn
+        .connect(outsider)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+
+      const amount = ethers.parseUnits('1', 18);
+      await expect(
+        handler
+          .connect(outsider)
+          .directRedeem(await collateral.getAddress(), amount, 0n)
+      )
+        .to.be.revertedWithCustomError(handler, 'InsufficientUserBalance')
+        .withArgs(amount, 0n);
+    });
+
+    it('reverts InsufficientAllowance when allowance < usnAmount even with sufficient balance', async function () {
+      // user holds 10k USN seeded but does not approve the handler
+      const amount = ethers.parseUnits('1', 18);
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), amount, 0n)
+      ).to.be.revertedWithCustomError(handler, 'InsufficientAllowance');
+    });
+  });
+
+  describe('role separation: APPROVER_ROLE vs DEFAULT_ADMIN_ROLE', function () {
+    beforeEach(async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await handler
+        .connect(user)
+        .directRedeem(
+          await collateral.getAddress(),
+          ethers.parseUnits('100', 18),
+          0n
+        );
+    });
+
+    it('approveQueuedRedeem reverts for DEFAULT_ADMIN_ROLE without APPROVER_ROLE', async function () {
+      await expect(
+        handler.connect(admin).approveQueuedRedeem(1n)
+      ).to.be.revertedWithCustomError(
+        handler,
+        'AccessControlUnauthorizedAccount'
+      );
+    });
+
+    it('rejectQueuedRedeem reverts for DEFAULT_ADMIN_ROLE without APPROVER_ROLE', async function () {
+      await expect(
+        handler.connect(admin).rejectQueuedRedeem(1n)
+      ).to.be.revertedWithCustomError(
+        handler,
+        'AccessControlUnauthorizedAccount'
+      );
+    });
+
+    it('setDirectRedeemLimitPerDay reverts for APPROVER_ROLE without DEFAULT_ADMIN_ROLE', async function () {
+      await handler.grantRole(
+        await handler.APPROVER_ROLE(),
+        await outsider.getAddress()
+      );
+      await expect(
+        handler.connect(outsider).setDirectRedeemLimitPerDay(1n)
+      ).to.be.revertedWithCustomError(
+        handler,
+        'AccessControlUnauthorizedAccount'
+      );
+      await expect(
+        handler.connect(admin).setDirectRedeemLimitPerDay(1n)
+      ).to.emit(handler, 'DirectRedeemLimitUpdated');
+    });
+  });
+
+  describe('daily cap enforced at approval time', function () {
+    beforeEach(async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+    });
+
+    it('approveQueuedRedeem consumes the daily cap and updates counter', async function () {
+      const amount = ethers.parseUnits('100', 18);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0n);
+
+      const before = await handler.currentDayDirectRedeemApproved();
+      await handler.approveQueuedRedeem(1n);
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(
+        before + amount
+      );
+    });
+
+    it('reverts DirectRedeemLimitExceeded when consumption would exceed cap', async function () {
+      const smallCap = ethers.parseUnits('50', 18);
+      await handler.setDirectRedeemLimitPerDay(smallCap);
+      const amount = ethers.parseUnits('100', 18);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0n);
+
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(handler, 'DirectRedeemLimitExceeded')
+        .withArgs(smallCap, amount);
+    });
+
+    it('rejectQueuedRedeem does NOT consume the cap', async function () {
+      const amount = ethers.parseUnits('100', 18);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0n);
+
+      const before = await handler.currentDayDirectRedeemApproved();
+      await handler.rejectQueuedRedeem(1n);
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(before);
+    });
+
+    it('day rollover resets the counter (explicit UTC day boundary)', async function () {
+      const cap = ethers.parseUnits('100', 18);
+      await handler.setDirectRedeemLimitPerDay(cap);
+      const amount = ethers.parseUnits('100', 18);
+
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0n);
+      await handler.approveQueuedRedeem(1n);
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(cap);
+
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0n);
+      await expect(
+        handler.approveQueuedRedeem(2n)
+      ).to.be.revertedWithCustomError(handler, 'DirectRedeemLimitExceeded');
+
+      const now = await latestTimestamp();
+      const nextDayStart = (Math.floor(now / 86400) + 1) * 86400;
+      await ethers.provider.send('evm_setNextBlockTimestamp', [nextDayStart]);
+      await ethers.provider.send('evm_mine', []);
+
+      await handler.approveQueuedRedeem(2n);
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(amount);
+    });
+
+    it('accumulates approved amounts across multiple entries within one day', async function () {
+      // Cap = 100 USN, entries of 60 and 50. Sum (110) overflows the cap at
+      // the second approval — exercises the newDayApproved = dayApproved +
+      // q.usnAmount arithmetic that single-entry tests do not.
+      const cap = ethers.parseUnits('100', 18);
+      await handler.setDirectRedeemLimitPerDay(cap);
+      const first = ethers.parseUnits('60', 18);
+      const second = ethers.parseUnits('50', 18);
+
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), first, 0n);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), second, 0n);
+
+      await handler.approveQueuedRedeem(1n);
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(first);
+
+      await expect(handler.approveQueuedRedeem(2n))
+        .to.be.revertedWithCustomError(handler, 'DirectRedeemLimitExceeded')
+        .withArgs(cap, first + second);
+
+      // Counter unchanged by the failed approval attempt
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(first);
+    });
+  });
+
+  describe('queue lifecycle: state changes between queue and approval', function () {
+    beforeEach(async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await handler
+        .connect(user)
+        .directRedeem(
+          await collateral.getAddress(),
+          ethers.parseUnits('100', 18),
+          0n
+        );
+    });
+
+    it('un-whitelisting the user after queueing reverts UserNotWhitelisted at approval', async function () {
+      await handler.removeWhitelistedUser(await user.getAddress());
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(handler, 'UserNotWhitelisted')
+        .withArgs(await user.getAddress());
+    });
+
+    it('removing the collateral after queueing reverts InvalidCollateralAddress at approval', async function () {
+      await handler.removeRedeemableCollateral(await collateral.getAddress());
+      await expect(
+        handler.approveQueuedRedeem(1n)
+      ).to.be.revertedWithCustomError(handler, 'InvalidCollateralAddress');
+    });
+
+    it('treasury drained after queueing reverts InsufficientTreasuryBalance at approval', async function () {
+      const q = await handler.getQueuedRedeem(1n);
+      const treasuryBalance = await collateral.balanceOf(
+        await treasury.getAddress()
+      );
+      await collateral
+        .connect(treasury)
+        .transfer(await outsider.getAddress(), treasuryBalance);
+
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(handler, 'InsufficientTreasuryBalance')
+        .withArgs(await collateral.getAddress(), q.collateralAmount, 0n);
+    });
+
+    it('user transfers USN away after queueing: burnFrom reverts with ERC20InsufficientBalance (queue-then-drain)', async function () {
+      // Re-validation covers whitelist/collateral/treasury but not user
+      // balance/allowance — those still fire from the ERC20 layer. Documents
+      // the escrow-less design.
+      const q = await handler.getQueuedRedeem(1n);
+      const bal = await usn.balanceOf(await user.getAddress());
+      await usn.connect(user).transfer(await outsider.getAddress(), bal);
+
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(usn, 'ERC20InsufficientBalance')
+        .withArgs(await user.getAddress(), 0n, q.usnAmount);
+    });
+
+    it('user revokes allowance after queueing: burnFrom reverts with ERC20InsufficientAllowance (queue-then-revoke)', async function () {
+      const q = await handler.getQueuedRedeem(1n);
+      await usn.connect(user).approve(await handler.getAddress(), 0n);
+
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(usn, 'ERC20InsufficientAllowance')
+        .withArgs(await handler.getAddress(), 0n, q.usnAmount);
+    });
+
+    it('price is locked at queue time: oracle drift does not change payout', async function () {
+      const q = await handler.getQueuedRedeem(1n);
+      const lockedCollateral = q.collateralAmount;
+
+      await oracle.setPrice(ONE_USD / 2n);
+
+      const before = await collateral.balanceOf(await user.getAddress());
+      await handler.approveQueuedRedeem(1n);
+      const after = await collateral.balanceOf(await user.getAddress());
+      expect(after - before).to.equal(lockedCollateral);
+    });
+  });
+
+  describe('queue expiry boundary', function () {
+    beforeEach(async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await handler
+        .connect(user)
+        .directRedeem(
+          await collateral.getAddress(),
+          ethers.parseUnits('100', 18),
+          0n
+        );
+    });
+
+    it('succeeds at exactly queuedAt + QUEUE_EXPIRY (comparison is strict `>`)', async function () {
+      const q = await handler.getQueuedRedeem(1n);
+      const target = Number(q.queuedAt) + QUEUE_EXPIRY;
+      await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
+      await expect(handler.approveQueuedRedeem(1n)).to.emit(
+        handler,
+        'RedeemApproved'
+      );
+    });
+
+    it('reverts QueueExpired at queuedAt + QUEUE_EXPIRY + 1s', async function () {
+      const q = await handler.getQueuedRedeem(1n);
+      const target = Number(q.queuedAt) + QUEUE_EXPIRY + 1;
+      await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
+      await expect(
+        handler.approveQueuedRedeem(1n)
+      ).to.be.revertedWithCustomError(handler, 'QueueExpired');
+    });
+  });
+
+  // ============================================================
+  // Attack-focused regression tests for issues #13 and #12.
+  // Each test names the exact property from the audit finding it verifies.
+  // ============================================================
+
+  describe('issue #13: directMint -> directRedeem cycling attack', function () {
+    it('single-tx sequential cycle leaves the treasury credited and the redeem cap untouched (literal regression)', async function () {
+      const cycleAmount = ethers.parseUnits('100', 18);
+
+      // Fund the attacker (= `user`) with collateral to feed the mint side.
+      await collateral.mint(await user.getAddress(), cycleAmount);
+      await collateral
+        .connect(user)
+        .approve(await minter.getAddress(), cycleAmount);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+
+      // Transfer USN admin to minter so directMint can mint.
+      await usn.setAdmin(await minter.getAddress());
+
+      const treasuryBefore = await collateral.balanceOf(
+        await treasury.getAddress()
+      );
+      const userUsnBefore = await usn.balanceOf(await user.getAddress());
+      const userColBefore = await collateral.balanceOf(await user.getAddress());
+      const capBefore = await handler.currentDayDirectRedeemApproved();
+
+      await minter
+        .connect(user)
+        .directMint(await collateral.getAddress(), cycleAmount, 0);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), cycleAmount, 0);
+
+      // Collateral moved into treasury via mint and STAYED there — the redeem
+      // did not return it (which is the whole point of the queue).
+      expect(await collateral.balanceOf(await treasury.getAddress())).to.equal(
+        treasuryBefore + cycleAmount
+      );
+      expect(await collateral.balanceOf(await user.getAddress())).to.equal(
+        userColBefore - cycleAmount
+      );
+      // USN was minted, not burned.
+      expect(await usn.balanceOf(await user.getAddress())).to.equal(
+        userUsnBefore + cycleAmount
+      );
+      // Redeem cap unconsumed — approvals are the only cap consumer.
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(
+        capBefore
+      );
+      // A PENDING queue entry was created, nothing more.
+      const q = await handler.getQueuedRedeem(1n);
+      expect(q.status).to.equal(0n);
+      expect(q.usnAmount).to.equal(cycleAmount);
+    });
+
+    it('flashloan-style single-external-call cycle leaves the attacker with zero collateral', async function () {
+      const cycleAmount = ethers.parseUnits('100', 18);
+
+      const AttackerFactory =
+        await ethers.getContractFactory('MockFlashAttacker');
+      const attacker: MockFlashAttacker = await AttackerFactory.deploy();
+
+      await minter.addWhitelistedUser(await attacker.getAddress());
+      await handler.addWhitelistedUser(await attacker.getAddress());
+      // Simulate the flashloan proceeds landing in the attacker contract.
+      await collateral.mint(await attacker.getAddress(), cycleAmount);
+      await usn.setAdmin(await minter.getAddress());
+
+      await attacker.attack(
+        await minter.getAddress(),
+        await handler.getAddress(),
+        await collateral.getAddress(),
+        await usn.getAddress(),
+        cycleAmount
+      );
+
+      // Attacker's collateral is stuck in the treasury; nothing came back
+      // inside the tx, so a flashloan can't be repaid.
+      expect(await collateral.balanceOf(await attacker.getAddress())).to.equal(
+        0n
+      );
+      // The redeem side left behind a PENDING queue entry for the attacker.
+      const q = await handler.getQueuedRedeem(1n);
+      expect(q.user).to.equal(await attacker.getAddress());
+      expect(q.status).to.equal(0n);
+      expect(q.usnAmount).to.equal(cycleAmount);
+    });
+
+    it('repeated cycling across multiple blocks does not drain the daily approval cap', async function () {
+      const cycleAmount = ethers.parseUnits('100', 18);
+      const cycles = 4;
+
+      await collateral.mint(
+        await user.getAddress(),
+        cycleAmount * BigInt(cycles)
+      );
+      await collateral
+        .connect(user)
+        .approve(await minter.getAddress(), ethers.MaxUint256);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await usn.setAdmin(await minter.getAddress());
+
+      for (let i = 0; i < cycles; i++) {
+        await minter
+          .connect(user)
+          .directMint(await collateral.getAddress(), cycleAmount, 0);
+        await handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), cycleAmount, 0);
+        await ethers.provider.send('evm_mine', []);
+      }
+
+      // Cap is not touched by any amount of queuing — approvals are the only
+      // consumer, and no approver ran here.
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(0n);
+      expect(await handler.nextQueueId()).to.equal(BigInt(cycles + 1));
+    });
+
+    it('attacker spam does not block a legitimate redeemer (per-entry approvals, not FIFO)', async function () {
+      const spam = DEFAULT_MIN_DIRECT_REDEEM;
+      const aliceAmount = ethers.parseUnits('50', 18);
+
+      // outsider = attacker, user = Alice
+      await handler.addWhitelistedUser(await outsider.getAddress());
+      await usn.mint(await outsider.getAddress(), spam * 4n);
+      await usn
+        .connect(outsider)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+
+      for (let i = 0; i < 4; i++) {
+        await handler
+          .connect(outsider)
+          .directRedeem(await collateral.getAddress(), spam, 0);
+      }
+      // Alice queues id 5.
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), aliceAmount, 0);
+
+      const capBefore = await handler.currentDayDirectRedeemApproved();
+      await expect(handler.approveQueuedRedeem(5n)).to.emit(
+        handler,
+        'RedeemApproved'
+      );
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(
+        capBefore + aliceAmount
+      );
+      // Attacker's entries are still PENDING and consumed no cap.
+      for (let id = 1n; id <= 4n; id++) {
+        const q = await handler.getQueuedRedeem(id);
+        expect(q.status).to.equal(0n);
+      }
+    });
+  });
+
+  describe('issue #12: front-run and marginal overflow into the queue', function () {
+    it('Bob queueing first does not change Alice`s locked price or shunt her onto a different path', async function () {
+      const bobAmount = DEFAULT_MIN_DIRECT_REDEEM;
+      const aliceAmount = ethers.parseUnits('50', 18);
+
+      const bob = outsider;
+      await handler.addWhitelistedUser(await bob.getAddress());
+      await usn.mint(await bob.getAddress(), bobAmount);
+      await usn
+        .connect(bob)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+
+      await handler
+        .connect(bob)
+        .directRedeem(await collateral.getAddress(), bobAmount, 0);
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), aliceAmount, 0);
+
+      const bobEntry = await handler.getQueuedRedeem(1n);
+      const aliceEntry = await handler.getQueuedRedeem(2n);
+      // Both entries are equal-class PENDING queue records; there is no
+      // distinct "immediate" path Bob's action could have shunted Alice off of.
+      expect(bobEntry.status).to.equal(0n);
+      expect(aliceEntry.status).to.equal(0n);
+      // Alice's locked collateral was computed from her own call, unaffected
+      // by Bob's earlier entry (1:1 at peg).
+      expect(aliceEntry.usnAmount).to.equal(aliceAmount);
+      expect(aliceEntry.collateralAmount).to.equal(aliceAmount);
+      // Both approvable independently within the default cap.
+      await expect(handler.approveQueuedRedeem(1n)).to.emit(
+        handler,
+        'RedeemApproved'
+      );
+      await expect(handler.approveQueuedRedeem(2n)).to.emit(
+        handler,
+        'RedeemApproved'
+      );
+      expect(await handler.currentDayDirectRedeemApproved()).to.equal(
+        bobAmount + aliceAmount
+      );
+    });
+
+    it('amounts far above the old daily cap queue with no special path; only approval reverts', async function () {
+      const bigAmount = ethers.parseUnits('200000', 18);
+      await usn.mint(await user.getAddress(), bigAmount);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      // Treasury needs enough collateral to survive the queue-time check.
+      await collateral.mint(await treasury.getAddress(), bigAmount);
+
+      const cap = await handler.directRedeemLimitPerDay();
+      expect(bigAmount).to.be.gt(cap);
+
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(await collateral.getAddress(), bigAmount, 0)
+      ).to.emit(handler, 'RedeemQueued');
+
+      // The old marginal-overflow logic no longer exists — the whole amount
+      // sits in one queue entry, and only the approval consults the cap.
+      await expect(handler.approveQueuedRedeem(1n))
+        .to.be.revertedWithCustomError(handler, 'DirectRedeemLimitExceeded')
+        .withArgs(cap, bigAmount);
+    });
+
+    it('amounts far above the old per-block redeem limit queue too (limit no longer gates directRedeem)', async function () {
+      await handler.setRedeemLimitPerBlock(1n);
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      // 100 USN >> 1 wei block limit — under the old code this would have
+      // gone through the queue path via _wouldExceedLimits; here it just
+      // queues like any other call.
+      await expect(
+        handler
+          .connect(user)
+          .directRedeem(
+            await collateral.getAddress(),
+            ethers.parseUnits('100', 18),
+            0
+          )
+      ).to.emit(handler, 'RedeemQueued');
+    });
+
+    it('directRedeem always returns the new queueId (invariant change from the old immediate path)', async function () {
+      await usn
+        .connect(user)
+        .approve(await handler.getAddress(), ethers.MaxUint256);
+      const amount = ethers.parseUnits('1', 18);
+
+      // Peek the return value without mutating state.
+      const nextIdBefore = await handler.nextQueueId();
+      const returned = await handler
+        .connect(user)
+        .directRedeem.staticCall(await collateral.getAddress(), amount, 0);
+      // Old behavior: 0 on the immediate path. New invariant: always the id.
+      expect(returned).to.equal(nextIdBefore);
+      expect(returned).to.be.gte(1n);
+
+      // Executing for real advances nextQueueId as predicted.
+      await handler
+        .connect(user)
+        .directRedeem(await collateral.getAddress(), amount, 0);
+      expect(await handler.nextQueueId()).to.equal(returned + 1n);
     });
   });
 });

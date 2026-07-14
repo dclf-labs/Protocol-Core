@@ -34,6 +34,9 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Constants
     bytes32 public constant BURNER_ROLE = keccak256("BURNER_ROLE");
+    // Approver is separate from DEFAULT_ADMIN_ROLE so the party that sets the
+    // daily approval cap cannot also approve queued redeems against it.
+    bytes32 public constant APPROVER_ROLE = keccak256("APPROVER_ROLE");
     bytes32 private constant REDEEM_TYPEHASH =
         keccak256(
             "RedeemOrder(string message,address user,address collateralAddress,uint256 collateralAmount,uint256 usnAmount,uint256 expiry,uint256 nonce)"
@@ -52,9 +55,14 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Direct redeem config
     uint256 public priceThresholdBps = 100; // 1% = 100 bps (0.99 - 1.01)
+
+    // Daily cap enforced at approval time (approver-side rate limit).
     uint256 public directRedeemLimitPerDay;
-    uint256 public currentDayDirectRedeemAmount;
-    uint256 public lastDirectRedeemDay;
+    uint256 public currentDayDirectRedeemApproved;
+    uint256 public lastDirectRedeemApprovalDay;
+
+    // Minimum USN amount for a direct redeem — prevents dust queue spam.
+    uint256 public minDirectRedeemAmount;
 
     // Mappings
     mapping(address => bool) public whitelistedUsers;
@@ -67,7 +75,7 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // Queue system
     uint256 public nextQueueId = 1; // starts at 1 so 0 means "not queued"
-    uint256 public constant QUEUE_EXPIRY = 24 hours;
+    uint256 public constant QUEUE_EXPIRY = 48 hours;
     mapping(uint256 => QueuedRedeem) public queuedRedeems;
 
     // Constructor
@@ -78,7 +86,8 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
         usnToken = USN(_usnToken);
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         redeemLimitPerBlock = 1000000 * 10 ** 18; // Default limit: 1 million USN
-        directRedeemLimitPerDay = 100000 * 10 ** 18; // Default: 100k USN per day for direct redeems
+        directRedeemLimitPerDay = 100000 * 10 ** 18; // Default: 100k USN per day of approved direct redeems
+        minDirectRedeemAmount = 1e18; // Default: 1 USN — blocks dust queue spam
     }
 
     // ============ External Functions ============
@@ -214,8 +223,11 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     /**
-     * @notice Direct redeem function - allows whitelisted users to redeem USN directly without BURNER_ROLE
-     * @dev Uses Chainlink price feeds to determine the exchange rate
+     * @notice Direct redeem function - queues a redeem request for admin approval
+     * @dev All direct redeems are queued and require manual admin approval to execute.
+     *      This prevents cycling attacks (e.g. directMint -> directRedeem in one tx) from
+     *      draining the redeem limits and blocking legitimate redeemers.
+     *      Uses Chainlink price feeds to lock the exchange rate at queue time:
      *      - If price is within threshold of $1.00 (default 1%): redeem 1:1
      *      - If price < lower bound: use peg price (protocol protection, user gets less collateral)
      *      - If price > upper bound: use actual price (user gets less collateral, fair market value)
@@ -244,14 +256,10 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert PriceFeedNotSet(collateralAddress);
         }
 
-        if (usnAmount == 0) {
-            revert ZeroAmount();
-        }
-
         if (treasury == address(0)) revert TreasuryNotSet();
 
-        uint256 currentAllowance = usnToken.allowance(msg.sender, address(this));
-        if (currentAllowance < usnAmount) revert InsufficientAllowance();
+        // Amount / balance / allowance / min-size checks.
+        _antiSpamCheck(msg.sender, usnAmount);
 
         // Get price from oracle
         uint256 price = _getPrice(collateralAddress, priceFeed);
@@ -264,67 +272,63 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
             revert InvalidCollateralAmount(minCollateralAmount, collateralAmount);
         }
 
-        // Check treasury has sufficient balance
+        // Soft treasury balance check at queue time — treasury balance is re-checked implicitly
+        // at approval time by safeTransferFrom in approveQueuedRedeem.
         uint256 treasuryBalance = IERC20(collateralAddress).balanceOf(treasury);
         if (treasuryBalance < collateralAmount) {
             revert InsufficientTreasuryBalance(collateralAddress, collateralAmount, treasuryBalance);
         }
 
-        // Check if limits would be exceeded — queue instead of reverting
-        if (_wouldExceedLimits(usnAmount)) {
-            // QUEUE PATH: just record intent, no token transfer yet
-            queueId = nextQueueId++;
-            queuedRedeems[queueId] = QueuedRedeem({
-                user: msg.sender,
-                collateralAddress: collateralAddress,
-                usnAmount: usnAmount,
-                collateralAmount: collateralAmount,
-                price: price,
-                queuedAt: block.timestamp,
-                status: QueueStatus.PENDING
-            });
+        // All direct redeems go through the queue for admin verification.
+        queueId = nextQueueId++;
+        queuedRedeems[queueId] = QueuedRedeem({
+            user: msg.sender,
+            collateralAddress: collateralAddress,
+            usnAmount: usnAmount,
+            collateralAmount: collateralAmount,
+            price: price,
+            queuedAt: block.timestamp,
+            status: QueueStatus.PENDING
+        });
 
-            emit RedeemQueued(queueId, msg.sender, collateralAddress, usnAmount, collateralAmount, price);
-            return queueId;
-        }
-
-        // IMMEDIATE PATH: update counters
-        _updateLimitCounters(usnAmount);
-
-        // Burn USN and transfer collateral
-        usnToken.burnFrom(msg.sender, usnAmount);
-        IERC20(collateralAddress).safeTransferFrom(treasury, msg.sender, collateralAmount);
-
-        emit DirectRedeem(msg.sender, usnAmount, collateralAmount, collateralAddress, price);
-        return 0;
+        emit RedeemQueued(queueId, msg.sender, collateralAddress, usnAmount, collateralAmount, price);
+        return queueId;
     }
 
     // ============ Queue Functions ============
 
     /**
-     * @notice Admin approves and executes a queued redeem in one step
-     * @dev Burns USN from user and sends collateral at the price locked at queue time
+     * @notice Approver executes a queued redeem in one step
+     * @dev Burns USN from user and sends collateral at the price locked at queue time.
+     *      Enforces a daily cap on approved amounts; the cap is set by DEFAULT_ADMIN_ROLE,
+     *      not by APPROVER_ROLE, so an approver cannot silently raise their own limit.
      */
-    function approveQueuedRedeem(uint256 _queueId) external nonReentrant whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
+    function approveQueuedRedeem(uint256 _queueId) external nonReentrant whenNotPaused onlyRole(APPROVER_ROLE) {
         QueuedRedeem storage q = queuedRedeems[_queueId];
         if (q.queuedAt == 0) revert QueueNotFound(_queueId);
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
         if (block.timestamp > q.queuedAt + QUEUE_EXPIRY) revert QueueExpired(_queueId);
 
-        // Re-validate the queue entry — state may have changed since it was queued.
+        // Re-validate — state may have changed during the 48h window. If the
+        // user was de-KYB'd, the collateral delisted (e.g. after a depeg), or
+        // the treasury drained, we must not execute at the queue-time price.
         if (!whitelistedUsers[q.user]) revert UserNotWhitelisted(q.user);
         if (!_redeemableCollaterals[q.collateralAddress]) revert InvalidCollateralAddress();
         if (treasury == address(0)) revert TreasuryNotSet();
-
         uint256 treasuryBalance = IERC20(q.collateralAddress).balanceOf(treasury);
         if (treasuryBalance < q.collateralAmount) {
             revert InsufficientTreasuryBalance(q.collateralAddress, q.collateralAmount, treasuryBalance);
         }
 
-        if (_wouldExceedLimits(q.usnAmount)) {
-            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, q.usnAmount);
+        // Enforce daily cap on approved amount.
+        uint256 currentDay = block.timestamp / 1 days;
+        uint256 dayApproved = currentDay > lastDirectRedeemApprovalDay ? 0 : currentDayDirectRedeemApproved;
+        uint256 newDayApproved = dayApproved + q.usnAmount;
+        if (newDayApproved > directRedeemLimitPerDay) {
+            revert DirectRedeemLimitExceeded(directRedeemLimitPerDay, newDayApproved);
         }
-        _updateLimitCounters(q.usnAmount);
+        currentDayDirectRedeemApproved = newDayApproved;
+        lastDirectRedeemApprovalDay = currentDay;
 
         q.status = QueueStatus.APPROVED;
 
@@ -337,9 +341,9 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     /**
-     * @notice Admin rejects a queued redeem
+     * @notice Approver rejects a queued redeem
      */
-    function rejectQueuedRedeem(uint256 _queueId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function rejectQueuedRedeem(uint256 _queueId) external onlyRole(APPROVER_ROLE) {
         QueuedRedeem storage q = queuedRedeems[_queueId];
         if (q.queuedAt == 0) revert QueueNotFound(_queueId);
         if (q.status != QueueStatus.PENDING) revert QueueNotPending(_queueId);
@@ -471,12 +475,24 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
     }
 
     /**
-     * @notice Set daily limit for direct redeems
-     * @param _limit Daily limit in USN (18 decimals)
+     * @notice Set the daily cap on approved direct redeem amount
+     * @dev Restricted to DEFAULT_ADMIN_ROLE. APPROVER_ROLE (which consumes the cap in
+     *      `approveQueuedRedeem`) is intentionally excluded so approvers cannot raise
+     *      their own limit.
      */
     function setDirectRedeemLimitPerDay(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
         directRedeemLimitPerDay = _limit;
         emit DirectRedeemLimitUpdated(_limit);
+    }
+
+    /**
+     * @notice Set the minimum USN amount accepted by `directRedeem`
+     * @dev Guards the queue from dust spam. Setting to 0 disables the min check
+     *      (zero-amount calls still revert via ZeroAmount).
+     */
+    function setMinDirectRedeemAmount(uint256 _min) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        minDirectRedeemAmount = _min;
+        emit MinDirectRedeemAmountUpdated(_min);
     }
 
     function setCollateralStalenessThreshold(address collateral, uint256 _threshold)
@@ -572,32 +588,25 @@ contract RedeemHandlerV2 is IRedeemHandlerV2, ReentrancyGuard, Pausable, AccessC
 
     // ============ Internal Functions ============
 
-    function _wouldExceedLimits(uint256 usnAmount) internal view returns (bool) {
-        // Check daily limit
-        uint256 currentDay = block.timestamp / 1 days;
-        uint256 dayAmount = currentDay > lastDirectRedeemDay ? 0 : currentDayDirectRedeemAmount;
-        if (dayAmount + usnAmount > directRedeemLimitPerDay) return true;
-
-        // Check block limit
-        uint256 blockAmount = block.number > lastRedeemBlock ? 0 : currentBlockRedeemAmount;
-        if (blockAmount + usnAmount > redeemLimitPerBlock) return true;
-
-        return false;
-    }
-
-    function _updateLimitCounters(uint256 usnAmount) internal {
-        uint256 currentDay = block.timestamp / 1 days;
-        if (currentDay > lastDirectRedeemDay) {
-            currentDayDirectRedeemAmount = 0;
-            lastDirectRedeemDay = currentDay;
+    /**
+     * @notice Anti-spam gate applied to `directRedeem` at queue time.
+     * @dev Enforces the four cheap conditions that make a queued redeem plausibly executable
+     *      — non-zero amount, meets the configurable min-size, user actually holds the USN,
+     *      user has approved this contract to burn it. This prevents an attacker from
+     *      spamming the queue with entries that can never be approved (approver would just
+     *      waste gas on failing `burnFrom`).
+     */
+    function _antiSpamCheck(address user, uint256 usnAmount) internal view {
+        if (usnAmount == 0) revert ZeroAmount();
+        if (usnAmount < minDirectRedeemAmount) {
+            revert DirectRedeemAmountTooSmall(minDirectRedeemAmount, usnAmount);
         }
-        currentDayDirectRedeemAmount += usnAmount;
-
-        if (block.number > lastRedeemBlock) {
-            currentBlockRedeemAmount = 0;
-            lastRedeemBlock = block.number;
+        uint256 balance = usnToken.balanceOf(user);
+        if (balance < usnAmount) {
+            revert InsufficientUserBalance(usnAmount, balance);
         }
-        currentBlockRedeemAmount += usnAmount;
+        uint256 currentAllowance = usnToken.allowance(user, address(this));
+        if (currentAllowance < usnAmount) revert InsufficientAllowance();
     }
 
     /**

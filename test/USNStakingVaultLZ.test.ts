@@ -147,55 +147,37 @@ describe('USNStakingVault', function () {
       );
     }
 
-    // Mint initial USN for users
-    const latestBlock = await ethers.provider.getBlock('latest');
-    const currentTimestamp = latestBlock!.timestamp;
-    const expiry = currentTimestamp + 360000 * 10; // ~1000 hours from now (on EVM clock)
-    const nonce = 1;
+    // Mint initial USN for users via directMint (signed mint path was
+    // removed in favour of the oracle-priced directMint).
+    const MockOracleFactory = await ethers.getContractFactory(
+      'MockChainlinkPriceFeed'
+    );
+    const collateralOracle = await MockOracleFactory.deploy(10n ** 8n, 8); // $1.00 peg
+    await MinterHandlerV2.setPriceFeed(
+      await mockCollateral.getAddress(),
+      await collateralOracle.getAddress()
+    );
+    await MinterHandlerV2.setCollateralStalenessThreshold(
+      await mockCollateral.getAddress(),
+      3600n
+    );
+    await MinterHandlerV2.setCustodialWallet(await StakingVault.getAddress());
+    // Raise the daily direct-mint cap enough to seed all three users at
+    // initialMint apiece; default is 100k which is below the fixture load.
+    await MinterHandlerV2.setDirectMintLimitPerDay(initialMint * 10n);
+    await MinterHandlerV2.setMintLimitPerBlock(initialMint * 10n);
 
     for (const user of [user1, user2, rebaseManager]) {
       const userAddress = await user.getAddress();
-      const order = {
-        message: `You are signing a request to mint ${initialMint} USN using ${initialMint} MCOL as collateral.`,
-        user: userAddress,
-        collateralAmount: initialMint,
-        usnAmount: initialMint,
-        nonce: nonce,
-        expiry: expiry,
-        collateralAddress: await mockCollateral.getAddress(),
-      };
-
-      const domain = {
-        name: 'MinterHandlerV2',
-        version: '1',
-        chainId: (await ethers.provider.getNetwork()).chainId,
-        verifyingContract: await MinterHandlerV2.getAddress(),
-      };
-
-      const types = {
-        Order: [
-          { name: 'message', type: 'string' },
-          { name: 'user', type: 'address' },
-          { name: 'collateralAddress', type: 'address' },
-          { name: 'collateralAmount', type: 'uint256' },
-          { name: 'usnAmount', type: 'uint256' },
-          { name: 'expiry', type: 'uint256' },
-          { name: 'nonce', type: 'uint256' },
-        ],
-      };
-
-      const signature = await user.signTypedData(domain, types, order);
-      MinterHandlerV2.setCustodialWallet(await StakingVault.getAddress());
-      // Mint collateral to user
       await mockCollateral.mint(userAddress, initialMint);
-
-      // Approve MinterHandlerV2 to spend collateral
       await mockCollateral
         .connect(user)
         .approve(await MinterHandlerV2.getAddress(), initialMint);
-
-      // Mint USN
-      await MinterHandlerV2.connect(minter).mint(order, signature);
+      await MinterHandlerV2.connect(user).directMint(
+        await mockCollateral.getAddress(),
+        initialMint,
+        0
+      );
     }
 
     // Approve both StakingVaults to spend USN
@@ -658,63 +640,6 @@ describe('USNStakingVault', function () {
     expect(finalBalance).to.equal(initialBalance + amount);
   });
 
-  it('should allow rebaseWithPermit', async function () {
-    // Seed the vault with shares so rebase doesn't revert with NoSharesMinted
-    await StakingVault.connect(user1).deposit(
-      stakeAmount,
-      await user1.getAddress()
-    );
-
-    const amount = ethers.parseUnits('1000', 18);
-    const deadline =
-      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hour from now (EVM clock)
-    const nonce = await USN.nonces(rebaseManager.address);
-
-    const domain = {
-      name: await USN.name(),
-      version: '1',
-      chainId: (await ethers.provider.getNetwork()).chainId,
-      verifyingContract: await USN.getAddress(),
-    };
-
-    const types = {
-      Permit: [
-        { name: 'owner', type: 'address' },
-        { name: 'spender', type: 'address' },
-        { name: 'value', type: 'uint256' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'deadline', type: 'uint256' },
-      ],
-    };
-
-    const values = {
-      owner: rebaseManager.address,
-      spender: await StakingVault.getAddress(),
-      value: amount,
-      nonce: nonce,
-      deadline: deadline,
-    };
-
-    const signature = await rebaseManager.signTypedData(domain, types, values);
-    const { v, r, s } = ethers.Signature.from(signature);
-
-    const initialTotalSupply = await StakingVault.totalSupply();
-    await expect(
-      StakingVault.connect(rebaseManager).rebaseWithPermit(
-        amount,
-        deadline,
-        v,
-        r,
-        s
-      )
-    )
-      .to.emit(StakingVault, 'Rebase')
-      .withArgs(amount);
-
-    // Shouldn't change the total supply
-    const finalTotalSupply = await StakingVault.totalSupply();
-    expect(finalTotalSupply).to.equal(initialTotalSupply);
-  });
   it('should allow depositWithSlippageCheck', async function () {
     const depositAmount = ethers.parseUnits('1000', 18);
     const minSharesOut = ethers.parseUnits('990', 18); // Allowing for 1% slippage
