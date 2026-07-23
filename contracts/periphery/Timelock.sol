@@ -148,7 +148,7 @@ contract Timelock is Ownable2Step, ITimelock {
 
     /**
      * @dev Schedules a ProxyAdmin ownership transfer. Only owner.
-     *      This path is always guarded by a fixed 30-day delay.
+     *      This path is always guarded by the fixed `OWNERSHIP_TRANSFER_DELAY` (2 days).
      */
     function scheduleProxyAdminOwnershipTransfer(
         address proxyAdmin,
@@ -161,7 +161,7 @@ contract Timelock is Ownable2Step, ITimelock {
     }
 
     /**
-     * @dev Executes a scheduled ProxyAdmin ownership transfer after 30 days.
+     * @dev Executes a scheduled ProxyAdmin ownership transfer after `OWNERSHIP_TRANSFER_DELAY` (2 days).
      */
     function executeProxyAdminOwnershipTransfer(
         address proxyAdmin,
