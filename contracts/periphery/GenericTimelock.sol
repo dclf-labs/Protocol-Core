@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "../interfaces/IGenericTimelock.sol";
 
 /**
  * @title GenericTimelock
@@ -24,8 +25,12 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * "setWithdrawPeriod(uint256)"). The keccak256 selector is prepended to `data`
  * automatically. If `signature` is empty, `data` is used as raw calldata (so a
  * pre-encoded call from an off-chain builder still works).
+ *
+ * Events and errors are declared in {IGenericTimelock} so external tooling
+ * (monitors, indexers, other contracts) can reference the shapes without
+ * importing the full implementation.
  */
-contract GenericTimelock is Ownable2Step, ReentrancyGuard {
+contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     // ============ Constants ============
 
     /// @notice Minimum acceptable delay between queue and execute.
@@ -47,37 +52,8 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard {
     /// @notice opHash => queued flag. True once queued, false after execute/cancel.
     mapping(bytes32 => bool) public queued;
 
-    // ============ Events ============
-
-    event DelayUpdated(uint256 previousDelay, uint256 newDelay);
-    event OperationQueued(
-        bytes32 indexed opHash,
-        address indexed target,
-        uint256 value,
-        string signature,
-        bytes data,
-        uint256 eta
-    );
-    event OperationExecuted(
-        bytes32 indexed opHash,
-        address indexed target,
-        uint256 value,
-        string signature,
-        bytes data,
-        bytes returnData
-    );
-    event OperationCancelled(bytes32 indexed opHash);
-
-    // ============ Errors ============
-
-    error DelayOutOfBounds(uint256 given, uint256 min, uint256 max);
-    error EtaTooSoon(uint256 eta, uint256 minEta);
-    error EtaTooLate(uint256 eta, uint256 maxEta);
-    error OperationAlreadyQueued(bytes32 opHash);
-    error OperationNotQueued(bytes32 opHash);
-    error OperationNotReady(uint256 eta, uint256 nowTs);
-    error OperationExpired(uint256 eta, uint256 gracePeriodEnd, uint256 nowTs);
-    error CallReverted(bytes returnData);
+    // ============ Events & Errors ============
+    // Declared in IGenericTimelock and inherited.
 
     // ============ Constructor ============
 
