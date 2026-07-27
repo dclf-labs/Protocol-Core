@@ -13,15 +13,14 @@ import "../interfaces/IGenericTimelock.sol";
 ///         `msg.sender == address(this timelock)` are supported.
 ///
 /// Delay guarantees an integrator should reason about:
-///   - MIN_DELAY = 2 days. This is the hard floor on every operation. No
-///     configuration change can go below it, so any observer knows that a
-///     newly-queued op cannot execute sooner than 2 days from now.
-///   - `setDelay` is self-timelocked: it is only callable by this contract
-///     itself, i.e. via queue/execute. Reducing the delay from N to M
-///     therefore takes at least N seconds (the current delay), not zero.
-///     A compromised owner cannot instantly drop the delay to accelerate
-///     a follow-up attack — they still have to wait the pre-compromise
-///     delay for the delay change itself to take effect.
+///   - MIN_DELAY = 2 days. Hard floor on every operation; no configuration
+///     can go below it.
+///   - Changing the delay is a dedicated two-step flow with the delay itself
+///     applied to the change: scheduleDelayChange(newDelay) records the
+///     request, executeDelayChange() applies it once the CURRENT delay has
+///     elapsed since scheduling. Reducing the delay from N to M thus takes
+///     at least N seconds. A compromised owner cannot instantly drop the
+///     delay to accelerate a follow-up attack.
 ///   - Ownership rotation on this contract uses Ownable2Step (transfer +
 ///     accept) but is NOT timelocked; who operates the timelock is
 ///     considered a governance-level decision, not an on-chain action the
@@ -45,6 +44,13 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     /// @notice Current queue-to-execute delay.
     uint256 public delay;
 
+    /// @notice Pending delay change (0 if none scheduled).
+    uint256 public pendingDelay;
+
+    /// @notice Earliest timestamp at which the pending delay change may be
+    ///         executed. 0 iff no change is pending.
+    uint256 public pendingDelayEta;
+
     /// @notice opHash => queued flag. True once queued, false after execute/cancel.
     mapping(bytes32 => bool) public queued;
 
@@ -60,22 +66,50 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         emit DelayUpdated(0, initialDelay);
     }
 
-    // ============ Admin ============
+    // ============ Delay management (self-timelocked, explicit two-step) ============
 
-    /// @notice Update the timelock delay. Self-timelocked: only callable by
-    ///         this contract itself (routed through queue/execute). Reducing
-    ///         the delay therefore takes at least the current delay.
-    /// @dev The new delay only affects operations queued AFTER the change;
-    ///      already-queued ops keep their original `eta`.
+    /// @notice Schedule a change to the timelock delay. The change cannot be
+    ///         applied until the CURRENT delay has elapsed since scheduling —
+    ///         so reducing the delay takes at least the current delay.
     /// @param newDelay New delay in seconds. Must be in [MIN_DELAY, MAX_DELAY].
-    function setDelay(uint256 newDelay) external {
-        if (msg.sender != address(this)) revert NotSelf(msg.sender);
+    /// @dev At most one delay change can be pending at a time. Use
+    ///      cancelDelayChange first to replace a pending one.
+    function scheduleDelayChange(uint256 newDelay) external onlyOwner {
         if (newDelay < MIN_DELAY || newDelay > MAX_DELAY) {
             revert DelayOutOfBounds(newDelay, MIN_DELAY, MAX_DELAY);
         }
+        if (pendingDelayEta != 0) {
+            revert DelayChangeAlreadyPending(pendingDelay, pendingDelayEta);
+        }
+        uint256 eta = block.timestamp + delay;
+        pendingDelay = newDelay;
+        pendingDelayEta = eta;
+        emit DelayChangeScheduled(newDelay, eta);
+    }
+
+    /// @notice Apply the pending delay change once the CURRENT delay has elapsed.
+    /// @dev Only affects operations queued AFTER this call; already-queued ops
+    ///      keep their original `eta`.
+    function executeDelayChange() external onlyOwner {
+        uint256 eta = pendingDelayEta;
+        if (eta == 0) revert NoPendingDelayChange();
+        if (block.timestamp < eta) revert OperationNotReady(eta, block.timestamp);
+
         uint256 previousDelay = delay;
+        uint256 newDelay = pendingDelay;
         delay = newDelay;
+        delete pendingDelay;
+        delete pendingDelayEta;
         emit DelayUpdated(previousDelay, newDelay);
+    }
+
+    /// @notice Cancel a pending delay change before it is executed.
+    function cancelDelayChange() external onlyOwner {
+        if (pendingDelayEta == 0) revert NoPendingDelayChange();
+        uint256 cancelledDelay = pendingDelay;
+        delete pendingDelay;
+        delete pendingDelayEta;
+        emit DelayChangeCancelled(cancelledDelay);
     }
 
     // ============ Queue / Execute / Cancel ============

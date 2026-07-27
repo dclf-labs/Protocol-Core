@@ -123,19 +123,25 @@ describe('GenericTimelock', function () {
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
-    it('direct setDelay reverts NotSelf for outsider', async function () {
+    it('only owner can scheduleDelayChange', async function () {
       await expect(
-        timelock.connect(outsider).setDelay(3 * DAY)
-      )
-        .to.be.revertedWithCustomError(timelock, 'NotSelf')
-        .withArgs(outsider.address);
+        timelock.connect(outsider).scheduleDelayChange(3 * DAY)
+      ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
-    it('direct setDelay reverts NotSelf even for the owner', async function () {
-      // Self-timelocked: owner cannot bypass the delay by calling setDelay directly.
-      await expect(timelock.setDelay(3 * DAY))
-        .to.be.revertedWithCustomError(timelock, 'NotSelf')
-        .withArgs(owner.address);
+    it('only owner can executeDelayChange', async function () {
+      await timelock.scheduleDelayChange(3 * DAY);
+      await increaseTime(DELAY + 5);
+      await expect(
+        timelock.connect(outsider).executeDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
+    });
+
+    it('only owner can cancelDelayChange', async function () {
+      await timelock.scheduleDelayChange(3 * DAY);
+      await expect(
+        timelock.connect(outsider).cancelDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
   });
 
@@ -489,74 +495,117 @@ describe('GenericTimelock', function () {
     });
   });
 
-  describe('setDelay (self-timelocked — must go through queue/execute)', function () {
-    it('updates delay within bounds via queue/execute', async function () {
-      const eta = (await now()) + DELAY + 5;
-      const sig = 'setDelay(uint256)';
-      const data = ethers.AbiCoder.defaultAbiCoder().encode(
-        ['uint256'],
-        [3 * DAY]
-      );
-      await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
-      await increaseTime(DELAY + 10);
-      await expect(
-        timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
-      )
+  describe('delay change: schedule → wait current delay → execute', function () {
+    it('schedule + execute after current delay updates delay', async function () {
+      const scheduleTs = (await now()) + 1; // approx block ts of the schedule tx
+      await expect(timelock.scheduleDelayChange(3 * DAY))
+        .to.emit(timelock, 'DelayChangeScheduled')
+        .withArgs(3 * DAY, (v: bigint) => v >= BigInt(scheduleTs + DELAY - 5));
+
+      expect(await timelock.pendingDelay()).to.equal(BigInt(3 * DAY));
+      const eta = await timelock.pendingDelayEta();
+      expect(eta).to.be.greaterThan(0n);
+
+      await increaseTime(DELAY + 5);
+
+      await expect(timelock.executeDelayChange())
         .to.emit(timelock, 'DelayUpdated')
         .withArgs(DELAY, 3 * DAY);
+
       expect(await timelock.delay()).to.equal(BigInt(3 * DAY));
+      expect(await timelock.pendingDelay()).to.equal(0n);
+      expect(await timelock.pendingDelayEta()).to.equal(0n);
     });
 
-    it('is delay-gated: cannot execute a setDelay change before eta', async function () {
-      const eta = (await now()) + DELAY + 5;
-      const sig = 'setDelay(uint256)';
-      const data = ethers.AbiCoder.defaultAbiCoder().encode(
-        ['uint256'],
-        [3 * DAY]
-      );
-      await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
-      // Try immediately
+    it('executeDelayChange before eta reverts OperationNotReady', async function () {
+      await timelock.scheduleDelayChange(3 * DAY);
+      // Attempt immediately
       await expect(
-        timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
+        timelock.executeDelayChange()
       ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
-      // Delay unchanged
+      // Halfway through the current delay: still reverts
+      await increaseTime(DELAY / 2);
+      await expect(
+        timelock.executeDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
+      // Delay unchanged throughout
       expect(await timelock.delay()).to.equal(BigInt(DELAY));
     });
 
-    it('out-of-bounds delay surfaces as CallReverted(DelayOutOfBounds) via execute', async function () {
-      const sig = 'setDelay(uint256)';
-      // MIN_DELAY - 1
-      {
-        const eta = (await now()) + DELAY + 5;
-        const data = ethers.AbiCoder.defaultAbiCoder().encode(
-          ['uint256'],
-          [2 * DAY - 1]
-        );
-        await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
-        await increaseTime(DELAY + 10);
-        const expected = timelock.interface.encodeErrorResult(
-          'DelayOutOfBounds',
-          [2 * DAY - 1, 2 * DAY, 30 * DAY]
-        );
-        await expect(
-          timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
-        )
-          .to.be.revertedWithCustomError(timelock, 'CallReverted')
-          .withArgs(expected);
-      }
-      // MAX_DELAY + 1 — use a fresh eta and re-queue
-      {
-        const eta = (await now()) + DELAY + 5;
-        const data = ethers.AbiCoder.defaultAbiCoder().encode(
-          ['uint256'],
-          [30 * DAY + 1]
-        );
-        await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
-        await increaseTime(DELAY + 10);
-        await expect(
-          timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
-        ).to.be.revertedWithCustomError(timelock, 'CallReverted');
-      }
+    it('executeDelayChange with nothing pending reverts NoPendingDelayChange', async function () {
+      await expect(
+        timelock.executeDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+    });
+
+    it('scheduleDelayChange rejects out-of-bounds (MIN_DELAY - 1 and MAX_DELAY + 1)', async function () {
+      await expect(
+        timelock.scheduleDelayChange(2 * DAY - 1)
+      )
+        .to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds')
+        .withArgs(2 * DAY - 1, 2 * DAY, 30 * DAY);
+      await expect(
+        timelock.scheduleDelayChange(30 * DAY + 1)
+      )
+        .to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds')
+        .withArgs(30 * DAY + 1, 2 * DAY, 30 * DAY);
+    });
+
+    it('cannot schedule a second change while one is pending; must cancel first', async function () {
+      await timelock.scheduleDelayChange(3 * DAY);
+      const pendingEta = await timelock.pendingDelayEta();
+
+      await expect(timelock.scheduleDelayChange(4 * DAY))
+        .to.be.revertedWithCustomError(timelock, 'DelayChangeAlreadyPending')
+        .withArgs(3 * DAY, pendingEta);
+
+      // Cancel then re-schedule the new value
+      await expect(timelock.cancelDelayChange())
+        .to.emit(timelock, 'DelayChangeCancelled')
+        .withArgs(3 * DAY);
+      await timelock.scheduleDelayChange(4 * DAY);
+      expect(await timelock.pendingDelay()).to.equal(BigInt(4 * DAY));
+    });
+
+    it('cancelDelayChange with nothing pending reverts NoPendingDelayChange', async function () {
+      await expect(
+        timelock.cancelDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+    });
+
+    it('cancel before execute: cannot execute, delay unchanged', async function () {
+      await timelock.scheduleDelayChange(3 * DAY);
+      await timelock.cancelDelayChange();
+      await increaseTime(DELAY + 5);
+      await expect(
+        timelock.executeDelayChange()
+      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+      expect(await timelock.delay()).to.equal(BigInt(DELAY));
+    });
+
+    it('after execute: new delay applies to NEXT queue, old queued ops keep original eta', async function () {
+      // Queue a normal op at current 2d delay, eta = now + 2d + 5
+      const sig = 'setValue(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [42]);
+      const originalEta = (await now()) + DELAY + 5;
+      await timelock.queue(await target.getAddress(), 0, sig, data, originalEta);
+
+      // Schedule a delay increase to 5 days and execute after current 2d delay
+      await timelock.scheduleDelayChange(5 * DAY);
+      await increaseTime(DELAY + 10);
+      await timelock.executeDelayChange();
+      expect(await timelock.delay()).to.equal(BigInt(5 * DAY));
+
+      // The originally queued op is still executable — its eta is baked in
+      // and already past. Fresh delay does not push it forward.
+      await timelock.execute(await target.getAddress(), 0, sig, data, originalEta);
+      expect(await target.value()).to.equal(42n);
+
+      // A NEW queue must now respect the 5-day floor
+      const tightEta = (await now()) + 5 * DAY - 10;
+      await expect(
+        timelock.queue(await target.getAddress(), 0, sig, data, tightEta)
+      ).to.be.revertedWithCustomError(timelock, 'EtaTooSoon');
     });
   });
 

@@ -8,8 +8,18 @@ pragma solidity 0.8.28;
 interface IGenericTimelock {
     // ============ Events ============
 
-    /// @notice Emitted on constructor init (previousDelay == 0) and on every setDelay.
+    /// @notice Emitted on constructor init (previousDelay == 0) and when a
+    ///         previously-scheduled delay change is applied by executeDelayChange.
     event DelayUpdated(uint256 previousDelay, uint256 newDelay);
+
+    /// @notice Emitted when a delay change is scheduled by the owner.
+    /// @param newDelay The delay that will be applied once eta is reached.
+    /// @param eta Earliest timestamp at which executeDelayChange can succeed
+    ///        (block.timestamp + current delay).
+    event DelayChangeScheduled(uint256 indexed newDelay, uint256 eta);
+
+    /// @notice Emitted when a pending delay change is cancelled before execute.
+    event DelayChangeCancelled(uint256 pendingDelay);
 
     /// @notice Emitted when a call is queued for delayed execution.
     event OperationQueued(
@@ -57,11 +67,18 @@ interface IGenericTimelock {
     /// @notice execute: `msg.value` did not match the value queued for this op.
     error ValueMismatch(uint256 given, uint256 expected);
 
-    /// @notice setDelay: caller must be the timelock itself (routed through
-    ///         queue/execute). Direct calls, even from the owner, revert.
-    error NotSelf(address caller);
+    /// @notice executeDelayChange / cancelDelayChange: no pending delay change.
+    error NoPendingDelayChange();
+
+    /// @notice scheduleDelayChange: a delay change is already queued.
+    ///         Cancel it before scheduling a new one.
+    error DelayChangeAlreadyPending(uint256 pendingDelay, uint256 pendingEta);
 
     /// @notice execute: the forwarded target call reverted. `returnData` is the
     ///         raw revert payload — decode it with the target contract's ABI.
     error CallReverted(bytes returnData);
+
+    // (NotSelf was removed — setDelay is no longer routed through queue/execute;
+    //  the dedicated schedule/execute/cancel functions above have the logic
+    //  directly.)
 }
