@@ -339,6 +339,79 @@ describe('GenericTimelock', function () {
         timelock.execute(await target.getAddress(), 0, sig, data, eta)
       ).to.be.revertedWithCustomError(timelock, 'OperationExpired');
     });
+
+    it('expired op: same params + same eta cannot be re-queued', async function () {
+      const eta = (await now()) + DELAY + 1;
+      const sig = 'setValue(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [1]);
+      await timelock.queue(await target.getAddress(), 0, sig, data, eta);
+      // Let it expire
+      await increaseTime(DELAY + 14 * DAY + 2);
+
+      // Re-queue attempt with the same (past) eta reverts EtaTooSoon (the
+      // eta<now+delay check fires before OperationAlreadyQueued, but the point
+      // is: this identical op cannot be revived).
+      await expect(
+        timelock.queue(await target.getAddress(), 0, sig, data, eta)
+      ).to.be.revertedWithCustomError(timelock, 'EtaTooSoon');
+    });
+
+    it('expired op: same params + new eta can be re-queued and executed', async function () {
+      const oldEta = (await now()) + DELAY + 1;
+      const sig = 'setValue(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [4242]
+      );
+      await timelock.queue(await target.getAddress(), 0, sig, data, oldEta);
+
+      // Expire the original
+      await increaseTime(DELAY + 14 * DAY + 5);
+
+      // Fresh eta produces a fresh opHash (eta is part of the hash)
+      const newEta = (await now()) + DELAY + 10;
+      await timelock.queue(await target.getAddress(), 0, sig, data, newEta);
+      await increaseTime(DELAY + 20);
+      await timelock.execute(await target.getAddress(), 0, sig, data, newEta);
+
+      expect(await target.value()).to.equal(4242n);
+
+      // Sanity: the old expired opHash still has queued=true (never cleared),
+      // but is unreachable — execute reverts OperationExpired, and its eta
+      // can't be reused because it's in the past.
+      const oldHash = await timelock.hashOperation(
+        await target.getAddress(),
+        0,
+        sig,
+        data,
+        oldEta
+      );
+      expect(await timelock.queued(oldHash)).to.equal(true);
+    });
+
+    it('expired op: cancel frees the stale queued slot', async function () {
+      const eta = (await now()) + DELAY + 1;
+      const sig = 'setValue(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [1]);
+      await timelock.queue(await target.getAddress(), 0, sig, data, eta);
+      await increaseTime(DELAY + 14 * DAY + 2);
+
+      const opHash = await timelock.hashOperation(
+        await target.getAddress(),
+        0,
+        sig,
+        data,
+        eta
+      );
+      expect(await timelock.queued(opHash)).to.equal(true);
+
+      // Cancel works even after expiry (no eta/delay check in cancel)
+      await expect(
+        timelock.cancel(await target.getAddress(), 0, sig, data, eta)
+      ).to.emit(timelock, 'OperationCancelled');
+
+      expect(await timelock.queued(opHash)).to.equal(false);
+    });
   });
 
   describe('ETH forwarding', function () {
@@ -355,31 +428,55 @@ describe('GenericTimelock', function () {
       expect(await target.etherReceived()).to.equal(value);
     });
 
-    it('reverts if msg.value != queued value', async function () {
+    it('reverts with ValueMismatch when msg.value != queued value', async function () {
       const eta = (await now()) + DELAY + 1;
       const sig = 'payMe()';
       const data = '0x';
       const value = ethers.parseEther('0.1');
+      const wrong = ethers.parseEther('0.05');
       await timelock.queue(await target.getAddress(), value, sig, data, eta);
       await increaseTime(DELAY + 2);
+      // Now a dedicated error with the two operand values, not overloaded CallReverted.
       await expect(
         timelock.execute(await target.getAddress(), value, sig, data, eta, {
-          value: ethers.parseEther('0.05'),
+          value: wrong,
         })
-      ).to.be.revertedWithCustomError(timelock, 'CallReverted');
+      )
+        .to.be.revertedWithCustomError(timelock, 'ValueMismatch')
+        .withArgs(wrong, value);
+    });
+
+    it('sending ETH directly to the timelock reverts (no receive/fallback)', async function () {
+      // The contract intentionally has no receive/fallback — nothing spends
+      // from its balance and stray ETH would be stuck.
+      await expect(
+        owner.sendTransaction({
+          to: await timelock.getAddress(),
+          value: 1n,
+        })
+      ).to.be.reverted;
     });
   });
 
   describe('reverts from target surface up as CallReverted', function () {
-    it('surfaces target revert data', async function () {
+    it('surfaces target revert data exactly', async function () {
+      // Tighten: not just the error shape — decode returnData and verify it
+      // equals the target's own IntentionalRevert("nope") payload.
       const eta = (await now()) + DELAY + 1;
       const sig = 'alwaysReverts()';
       const data = '0x';
       await timelock.queue(await target.getAddress(), 0, sig, data, eta);
       await increaseTime(DELAY + 2);
+
+      const expectedRevert = target.interface.encodeErrorResult(
+        'IntentionalRevert',
+        ['nope']
+      );
       await expect(
         timelock.execute(await target.getAddress(), 0, sig, data, eta)
-      ).to.be.revertedWithCustomError(timelock, 'CallReverted');
+      )
+        .to.be.revertedWithCustomError(timelock, 'CallReverted')
+        .withArgs(expectedRevert);
     });
   });
 

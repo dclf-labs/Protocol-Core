@@ -1,35 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "../interfaces/IGenericTimelock.sol";
 
-/**
- * @title GenericTimelock
- * @notice Compound-style timelock. Queues arbitrary calls (target, value,
- *         function signature, ABI-encoded inputs) and executes them after a
- *         configurable delay. Any contract whose privileged function is owned
- *         (or role-granted) to this timelock can be safely managed through it.
- *
- * Typical wiring:
- *   1. Deploy GenericTimelock with (multisig, delay).
- *   2. Transfer ownership / grant admin role on target contracts to this
- *      timelock's address.
- *   3. Multisig calls `queue(target, value, signature, data, eta)` to schedule.
- *   4. After `eta`, multisig (or anyone if made permissionless) calls
- *      `execute(...)` — the timelock forwards the call to `target`.
- *
- * The `signature` parameter is the textual function signature (e.g.
- * "setWithdrawPeriod(uint256)"). The keccak256 selector is prepended to `data`
- * automatically. If `signature` is empty, `data` is used as raw calldata (so a
- * pre-encoded call from an off-chain builder still works).
- *
- * Events and errors are declared in {IGenericTimelock} so external tooling
- * (monitors, indexers, other contracts) can reference the shapes without
- * importing the full implementation.
- */
+/// @title GenericTimelock
+/// @notice Queues arbitrary (target, value, signature, data, eta) calls and
+///         executes them after a configurable delay. The owner can queue,
+///         execute, cancel, and adjust the delay. Every executed call is
+///         forwarded from this contract's context, so target contracts that
+///         gate on `msg.sender == address(this timelock)` are supported.
 contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     // ============ Constants ============
 
@@ -39,9 +20,9 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     /// @notice Maximum acceptable delay between queue and execute.
     uint256 public constant MAX_DELAY = 30 days;
 
-    /// @notice Maximum window after `eta` during which an execution is still
-    /// accepted. After this, the queued op expires and must be re-queued.
-    /// Prevents indefinitely-live pending calls that could surprise later.
+    /// @notice Window after `eta` during which an execution is still accepted.
+    ///         Past this, the queued flag remains set but `execute` reverts —
+    ///         see `cancel` to free the slot, or re-queue with a fresh `eta`.
     uint256 public constant GRACE_PERIOD = 14 days;
 
     // ============ Storage ============
@@ -52,15 +33,10 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     /// @notice opHash => queued flag. True once queued, false after execute/cancel.
     mapping(bytes32 => bool) public queued;
 
-    // ============ Events & Errors ============
-    // Declared in IGenericTimelock and inherited.
-
     // ============ Constructor ============
 
-    /**
-     * @param initialOwner Address that can queue / execute / cancel / setDelay.
-     * @param initialDelay Delay in seconds; must be in [MIN_DELAY, MAX_DELAY].
-     */
+    /// @param initialOwner Address that can queue / execute / cancel / setDelay.
+    /// @param initialDelay Delay in seconds; must satisfy MIN_DELAY <= x <= MAX_DELAY.
     constructor(address initialOwner, uint256 initialDelay) Ownable(initialOwner) {
         if (initialDelay < MIN_DELAY || initialDelay > MAX_DELAY) {
             revert DelayOutOfBounds(initialDelay, MIN_DELAY, MAX_DELAY);
@@ -71,10 +47,10 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
 
     // ============ Admin ============
 
-    /**
-     * @notice Update the timelock delay. Must be within [MIN_DELAY, MAX_DELAY].
-     * @dev The new delay only affects operations queued AFTER the change.
-     */
+    /// @notice Update the timelock delay. Must be within [MIN_DELAY, MAX_DELAY].
+    /// @dev The new delay only affects operations queued AFTER the change;
+    ///      already-queued ops keep their original `eta`.
+    /// @param newDelay New delay in seconds.
     function setDelay(uint256 newDelay) external onlyOwner {
         if (newDelay < MIN_DELAY || newDelay > MAX_DELAY) {
             revert DelayOutOfBounds(newDelay, MIN_DELAY, MAX_DELAY);
@@ -86,18 +62,16 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
 
     // ============ Queue / Execute / Cancel ============
 
-    /**
-     * @notice Queue an operation for later execution.
-     * @param target Contract to call.
-     * @param value ETH to send with the call.
-     * @param signature Textual function signature (e.g. "setFoo(uint256)"). Pass
-     *        empty string to treat `data` as raw calldata.
-     * @param data ABI-encoded arguments (WITHOUT the 4-byte selector) when
-     *        `signature` is non-empty, else raw calldata.
-     * @param eta Earliest timestamp at which the operation may execute. Must
-     *        satisfy `eta >= block.timestamp + delay` at queue time.
-     * @return opHash The unique identifier for this operation.
-     */
+    /// @notice Queue an operation for later execution.
+    /// @param target Contract to call.
+    /// @param value ETH to send with the call. `msg.value` at `execute` time must equal this.
+    /// @param signature Textual function signature (e.g. "setFoo(uint256)"). Pass empty
+    ///        string to treat `data` as raw calldata.
+    /// @param data ABI-encoded arguments (without the 4-byte selector) when `signature` is
+    ///        non-empty, else raw calldata.
+    /// @param eta Earliest timestamp at which the operation may execute. Must satisfy
+    ///        `eta >= block.timestamp + delay` at queue time.
+    /// @return opHash Unique identifier for this operation.
     function queue(
         address target,
         uint256 value,
@@ -115,9 +89,13 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         emit OperationQueued(opHash, target, value, signature, data, eta);
     }
 
-    /**
-     * @notice Cancel a queued operation before it executes.
-     */
+    /// @notice Cancel a queued operation. Callable at any time before execute, and
+    ///         also after expiry to free the queued slot.
+    /// @param target Same as `queue`.
+    /// @param value Same as `queue`.
+    /// @param signature Same as `queue`.
+    /// @param data Same as `queue`.
+    /// @param eta Same as `queue`.
     function cancel(
         address target,
         uint256 value,
@@ -131,12 +109,14 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         emit OperationCancelled(opHash);
     }
 
-    /**
-     * @notice Execute a previously queued operation once its eta has passed.
-     * @dev Owner-only by convention. If you want permissionless execution, wrap
-     *      this contract with a role-based adapter or fork with the modifier
-     *      removed.
-     */
+    /// @notice Execute a queued operation once its `eta` has passed and before
+    ///         `eta + GRACE_PERIOD`.
+    /// @param target Same as `queue`.
+    /// @param value Same as `queue`. `msg.value` must equal this exactly.
+    /// @param signature Same as `queue`.
+    /// @param data Same as `queue`.
+    /// @param eta Same as `queue`.
+    /// @return returnData Raw return data from the underlying target call.
     function execute(
         address target,
         uint256 value,
@@ -151,9 +131,8 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         if (block.timestamp > gracePeriodEnd) {
             revert OperationExpired(eta, gracePeriodEnd, block.timestamp);
         }
-        if (msg.value != value) {
-            revert CallReverted(abi.encode("msg.value != value"));
-        }
+        if (msg.value != value) revert ValueMismatch(msg.value, value);
+
         delete queued[opHash];
 
         bytes memory callData = _buildCalldata(signature, data);
@@ -166,11 +145,9 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
 
     // ============ Views ============
 
-    /**
-     * @notice Deterministic identifier for an operation. Two queued operations
-     *         with the same parameters share the same hash — they cannot be
-     *         queued simultaneously.
-     */
+    /// @notice Deterministic identifier for an operation. Two operations with
+    ///         identical params share the same hash and cannot be queued
+    ///         simultaneously.
     function hashOperation(
         address target,
         uint256 value,
@@ -181,10 +158,7 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         return keccak256(abi.encode(target, value, signature, data, eta));
     }
 
-    /**
-     * @notice Build the raw calldata for a call. Public for off-chain tooling
-     *         that wants to preview the exact bytes forwarded to `target`.
-     */
+    /// @notice Preview the exact bytes forwarded to `target` at execute time.
     function buildCalldata(
         string calldata signature,
         bytes calldata data
@@ -202,9 +176,7 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         return bytes.concat(bytes4(keccak256(bytes(signature))), data);
     }
 
-    // ============ Fallback ============
-
-    /// @notice Accept ETH so operations can carry `value > 0` without a
-    ///         separate pre-funding step.
-    receive() external payable {}
+    // Intentionally no receive/fallback: this contract does not spend from
+    // its own balance. All ETH for value>0 executions must be supplied via
+    // `msg.value` at `execute` time.
 }
