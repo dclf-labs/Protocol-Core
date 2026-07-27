@@ -8,9 +8,24 @@ import "../interfaces/IGenericTimelock.sol";
 /// @title GenericTimelock
 /// @notice Queues arbitrary (target, value, signature, data, eta) calls and
 ///         executes them after a configurable delay. The owner can queue,
-///         execute, cancel, and adjust the delay. Every executed call is
-///         forwarded from this contract's context, so target contracts that
-///         gate on `msg.sender == address(this timelock)` are supported.
+///         execute, and cancel operations. Every executed call is forwarded
+///         from this contract's context, so target contracts that gate on
+///         `msg.sender == address(this timelock)` are supported.
+///
+/// Delay guarantees an integrator should reason about:
+///   - MIN_DELAY = 2 days. This is the hard floor on every operation. No
+///     configuration change can go below it, so any observer knows that a
+///     newly-queued op cannot execute sooner than 2 days from now.
+///   - `setDelay` is self-timelocked: it is only callable by this contract
+///     itself, i.e. via queue/execute. Reducing the delay from N to M
+///     therefore takes at least N seconds (the current delay), not zero.
+///     A compromised owner cannot instantly drop the delay to accelerate
+///     a follow-up attack — they still have to wait the pre-compromise
+///     delay for the delay change itself to take effect.
+///   - Ownership rotation on this contract uses Ownable2Step (transfer +
+///     accept) but is NOT timelocked; who operates the timelock is
+///     considered a governance-level decision, not an on-chain action the
+///     timelock guards against itself.
 contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     // ============ Constants ============
 
@@ -47,11 +62,14 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
 
     // ============ Admin ============
 
-    /// @notice Update the timelock delay. Must be within [MIN_DELAY, MAX_DELAY].
+    /// @notice Update the timelock delay. Self-timelocked: only callable by
+    ///         this contract itself (routed through queue/execute). Reducing
+    ///         the delay therefore takes at least the current delay.
     /// @dev The new delay only affects operations queued AFTER the change;
     ///      already-queued ops keep their original `eta`.
-    /// @param newDelay New delay in seconds.
-    function setDelay(uint256 newDelay) external onlyOwner {
+    /// @param newDelay New delay in seconds. Must be in [MIN_DELAY, MAX_DELAY].
+    function setDelay(uint256 newDelay) external {
+        if (msg.sender != address(this)) revert NotSelf(msg.sender);
         if (newDelay < MIN_DELAY || newDelay > MAX_DELAY) {
             revert DelayOutOfBounds(newDelay, MIN_DELAY, MAX_DELAY);
         }

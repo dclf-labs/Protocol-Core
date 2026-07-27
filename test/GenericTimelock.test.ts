@@ -123,10 +123,19 @@ describe('GenericTimelock', function () {
       ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
     });
 
-    it('only owner can setDelay', async function () {
+    it('direct setDelay reverts NotSelf for outsider', async function () {
       await expect(
         timelock.connect(outsider).setDelay(3 * DAY)
-      ).to.be.revertedWithCustomError(timelock, 'OwnableUnauthorizedAccount');
+      )
+        .to.be.revertedWithCustomError(timelock, 'NotSelf')
+        .withArgs(outsider.address);
+    });
+
+    it('direct setDelay reverts NotSelf even for the owner', async function () {
+      // Self-timelocked: owner cannot bypass the delay by calling setDelay directly.
+      await expect(timelock.setDelay(3 * DAY))
+        .to.be.revertedWithCustomError(timelock, 'NotSelf')
+        .withArgs(owner.address);
     });
   });
 
@@ -480,22 +489,74 @@ describe('GenericTimelock', function () {
     });
   });
 
-  describe('setDelay', function () {
-    it('updates delay within bounds', async function () {
-      await expect(timelock.setDelay(3 * DAY))
+  describe('setDelay (self-timelocked — must go through queue/execute)', function () {
+    it('updates delay within bounds via queue/execute', async function () {
+      const eta = (await now()) + DELAY + 5;
+      const sig = 'setDelay(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [3 * DAY]
+      );
+      await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
+      await increaseTime(DELAY + 10);
+      await expect(
+        timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
+      )
         .to.emit(timelock, 'DelayUpdated')
         .withArgs(DELAY, 3 * DAY);
       expect(await timelock.delay()).to.equal(BigInt(3 * DAY));
     });
 
-    it('rejects out-of-bounds delay', async function () {
-      // Exactly MIN_DELAY - 1 and MAX_DELAY + 1
+    it('is delay-gated: cannot execute a setDelay change before eta', async function () {
+      const eta = (await now()) + DELAY + 5;
+      const sig = 'setDelay(uint256)';
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [3 * DAY]
+      );
+      await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
+      // Try immediately
       await expect(
-        timelock.setDelay(2 * DAY - 1)
-      ).to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds');
-      await expect(
-        timelock.setDelay(30 * DAY + 1)
-      ).to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds');
+        timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
+      ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
+      // Delay unchanged
+      expect(await timelock.delay()).to.equal(BigInt(DELAY));
+    });
+
+    it('out-of-bounds delay surfaces as CallReverted(DelayOutOfBounds) via execute', async function () {
+      const sig = 'setDelay(uint256)';
+      // MIN_DELAY - 1
+      {
+        const eta = (await now()) + DELAY + 5;
+        const data = ethers.AbiCoder.defaultAbiCoder().encode(
+          ['uint256'],
+          [2 * DAY - 1]
+        );
+        await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
+        await increaseTime(DELAY + 10);
+        const expected = timelock.interface.encodeErrorResult(
+          'DelayOutOfBounds',
+          [2 * DAY - 1, 2 * DAY, 30 * DAY]
+        );
+        await expect(
+          timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
+        )
+          .to.be.revertedWithCustomError(timelock, 'CallReverted')
+          .withArgs(expected);
+      }
+      // MAX_DELAY + 1 — use a fresh eta and re-queue
+      {
+        const eta = (await now()) + DELAY + 5;
+        const data = ethers.AbiCoder.defaultAbiCoder().encode(
+          ['uint256'],
+          [30 * DAY + 1]
+        );
+        await timelock.queue(await timelock.getAddress(), 0, sig, data, eta);
+        await increaseTime(DELAY + 10);
+        await expect(
+          timelock.execute(await timelock.getAddress(), 0, sig, data, eta)
+        ).to.be.revertedWithCustomError(timelock, 'CallReverted');
+      }
     });
   });
 

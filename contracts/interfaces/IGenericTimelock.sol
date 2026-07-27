@@ -57,6 +57,10 @@ interface IGenericTimelock {
     /// @notice execute: `msg.value` did not match the value queued for this op.
     error ValueMismatch(uint256 given, uint256 expected);
 
+    /// @notice setDelay: caller must be the timelock itself (routed through
+    ///         queue/execute). Direct calls, even from the owner, revert.
+    error NotSelf(address caller);
+
     /// @notice execute: the forwarded target call reverted. `returnData` is the
     ///         raw revert payload — decode it with the target contract's ABI.
     error CallReverted(bytes returnData);
