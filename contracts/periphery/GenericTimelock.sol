@@ -35,8 +35,12 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     uint256 public constant MAX_DELAY = 30 days;
 
     /// @notice Window after `eta` during which an execution is still accepted.
-    ///         Past this, the queued flag remains set but `execute` reverts —
-    ///         see `cancel` to free the slot, or re-queue with a fresh `eta`.
+    ///         Past this, `execute` reverts `OperationExpired`. The queued
+    ///         flag remains set for the expired opHash but has no on-chain
+    ///         effect — that opHash can never execute (eta is in the past)
+    ///         and cannot be re-queued (same eta trips `EtaTooSoon`).
+    ///         To retry the operation, queue it again with a fresh `eta`;
+    ///         the new opHash is independent.
     uint256 public constant GRACE_PERIOD = 14 days;
 
     // ============ Storage ============
@@ -56,7 +60,9 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
 
     // ============ Constructor ============
 
-    /// @param initialOwner Address that can queue / execute / cancel / setDelay.
+    /// @param initialOwner Address that can queue / execute / cancel operations
+    ///        and scheduleDelayChange / executeDelayChange / cancelDelayChange
+    ///        the delay itself.
     /// @param initialDelay Delay in seconds; must satisfy MIN_DELAY <= x <= MAX_DELAY.
     constructor(address initialOwner, uint256 initialDelay) Ownable(initialOwner) {
         if (initialDelay < MIN_DELAY || initialDelay > MAX_DELAY) {
@@ -93,7 +99,7 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     function executeDelayChange() external onlyOwner {
         uint256 eta = pendingDelayEta;
         if (eta == 0) revert NoPendingDelayChange();
-        if (block.timestamp < eta) revert OperationNotReady(eta, block.timestamp);
+        if (block.timestamp < eta) revert DelayChangeNotReady(eta, block.timestamp);
 
         uint256 previousDelay = delay;
         uint256 newDelay = pendingDelay;
@@ -141,8 +147,10 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
         emit OperationQueued(opHash, target, value, signature, data, eta);
     }
 
-    /// @notice Cancel a queued operation. Callable at any time before execute, and
-    ///         also after expiry to free the queued slot.
+    /// @notice Cancel a queued operation. Callable at any time before execute.
+    ///         Also callable on an already-expired op, but this only clears
+    ///         a mapping entry that has no effect either way — the expired
+    ///         opHash can already never execute and can never be re-queued.
     /// @param target Same as `queue`.
     /// @param value Same as `queue`.
     /// @param signature Same as `queue`.

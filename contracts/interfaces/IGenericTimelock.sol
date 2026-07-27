@@ -74,6 +74,11 @@ interface IGenericTimelock {
     ///         Cancel it before scheduling a new one.
     error DelayChangeAlreadyPending(uint256 pendingDelay, uint256 pendingEta);
 
+    /// @notice executeDelayChange: current time has not yet reached the pending
+    ///         delay change's eta. Distinct from OperationNotReady so decoders
+    ///         attribute the revert to delay administration, not the op pipeline.
+    error DelayChangeNotReady(uint256 eta, uint256 nowTs);
+
     /// @notice execute: the forwarded target call reverted. `returnData` is the
     ///         raw revert payload — decode it with the target contract's ABI.
     error CallReverted(bytes returnData);

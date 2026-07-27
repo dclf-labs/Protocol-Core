@@ -517,36 +517,34 @@ describe('GenericTimelock', function () {
       expect(await timelock.pendingDelayEta()).to.equal(0n);
     });
 
-    it('executeDelayChange before eta reverts OperationNotReady', async function () {
+    it('executeDelayChange before eta reverts DelayChangeNotReady', async function () {
+      // Dedicated error for the delay-admin path — a decoder should not
+      // confuse this with an op-pipeline OperationNotReady.
       await timelock.scheduleDelayChange(3 * DAY);
-      // Attempt immediately
-      await expect(
-        timelock.executeDelayChange()
-      ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
-      // Halfway through the current delay: still reverts
+      await expect(timelock.executeDelayChange()).to.be.revertedWithCustomError(
+        timelock,
+        'DelayChangeNotReady'
+      );
       await increaseTime(DELAY / 2);
-      await expect(
-        timelock.executeDelayChange()
-      ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
-      // Delay unchanged throughout
+      await expect(timelock.executeDelayChange()).to.be.revertedWithCustomError(
+        timelock,
+        'DelayChangeNotReady'
+      );
       expect(await timelock.delay()).to.equal(BigInt(DELAY));
     });
 
     it('executeDelayChange with nothing pending reverts NoPendingDelayChange', async function () {
-      await expect(
-        timelock.executeDelayChange()
-      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+      await expect(timelock.executeDelayChange()).to.be.revertedWithCustomError(
+        timelock,
+        'NoPendingDelayChange'
+      );
     });
 
     it('scheduleDelayChange rejects out-of-bounds (MIN_DELAY - 1 and MAX_DELAY + 1)', async function () {
-      await expect(
-        timelock.scheduleDelayChange(2 * DAY - 1)
-      )
+      await expect(timelock.scheduleDelayChange(2 * DAY - 1))
         .to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds')
         .withArgs(2 * DAY - 1, 2 * DAY, 30 * DAY);
-      await expect(
-        timelock.scheduleDelayChange(30 * DAY + 1)
-      )
+      await expect(timelock.scheduleDelayChange(30 * DAY + 1))
         .to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds')
         .withArgs(30 * DAY + 1, 2 * DAY, 30 * DAY);
     });
@@ -568,18 +566,20 @@ describe('GenericTimelock', function () {
     });
 
     it('cancelDelayChange with nothing pending reverts NoPendingDelayChange', async function () {
-      await expect(
-        timelock.cancelDelayChange()
-      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+      await expect(timelock.cancelDelayChange()).to.be.revertedWithCustomError(
+        timelock,
+        'NoPendingDelayChange'
+      );
     });
 
     it('cancel before execute: cannot execute, delay unchanged', async function () {
       await timelock.scheduleDelayChange(3 * DAY);
       await timelock.cancelDelayChange();
       await increaseTime(DELAY + 5);
-      await expect(
-        timelock.executeDelayChange()
-      ).to.be.revertedWithCustomError(timelock, 'NoPendingDelayChange');
+      await expect(timelock.executeDelayChange()).to.be.revertedWithCustomError(
+        timelock,
+        'NoPendingDelayChange'
+      );
       expect(await timelock.delay()).to.equal(BigInt(DELAY));
     });
 
@@ -588,7 +588,13 @@ describe('GenericTimelock', function () {
       const sig = 'setValue(uint256)';
       const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [42]);
       const originalEta = (await now()) + DELAY + 5;
-      await timelock.queue(await target.getAddress(), 0, sig, data, originalEta);
+      await timelock.queue(
+        await target.getAddress(),
+        0,
+        sig,
+        data,
+        originalEta
+      );
 
       // Schedule a delay increase to 5 days and execute after current 2d delay
       await timelock.scheduleDelayChange(5 * DAY);
@@ -598,7 +604,13 @@ describe('GenericTimelock', function () {
 
       // The originally queued op is still executable — its eta is baked in
       // and already past. Fresh delay does not push it forward.
-      await timelock.execute(await target.getAddress(), 0, sig, data, originalEta);
+      await timelock.execute(
+        await target.getAddress(),
+        0,
+        sig,
+        data,
+        originalEta
+      );
       expect(await target.value()).to.equal(42n);
 
       // A NEW queue must now respect the 5-day floor
