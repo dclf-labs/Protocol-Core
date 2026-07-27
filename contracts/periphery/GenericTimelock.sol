@@ -34,7 +34,7 @@ contract GenericTimelock is Ownable2Step, ReentrancyGuard, IGenericTimelock {
     // ============ Constants ============
 
     /// @notice Minimum acceptable delay between queue and execute.
-    uint256 public constant MIN_DELAY = 1 days;
+    uint256 public constant MIN_DELAY = 2 days;
 
     /// @notice Maximum acceptable delay between queue and execute.
     uint256 public constant MAX_DELAY = 30 days;

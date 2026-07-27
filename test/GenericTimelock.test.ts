@@ -44,7 +44,10 @@ describe('GenericTimelock', function () {
     usn = await MockERC20Factory.deploy('USN', 'USN');
     const WithdrawalHandlerFactory =
       await ethers.getContractFactory('WithdrawalHandler');
-    handler = await WithdrawalHandlerFactory.deploy(await usn.getAddress(), DAY);
+    handler = await WithdrawalHandlerFactory.deploy(
+      await usn.getAddress(),
+      DAY
+    );
 
     // Deploy the Timelock
     const TimelockFactory = await ethers.getContractFactory('GenericTimelock');
@@ -63,9 +66,10 @@ describe('GenericTimelock', function () {
 
   describe('constructor', function () {
     it('rejects delay below MIN_DELAY', async function () {
+      // MIN_DELAY is 2 days — exactly one second below should still revert.
       const Factory = await ethers.getContractFactory('GenericTimelock');
       await expect(
-        Factory.deploy(owner.address, DAY - 1)
+        Factory.deploy(owner.address, 2 * DAY - 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds');
     });
 
@@ -130,7 +134,10 @@ describe('GenericTimelock', function () {
     it('setValue after delay actually updates target state', async function () {
       const eta = (await now()) + DELAY + 1;
       const sig = 'setValue(uint256)';
-      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [1234]);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [1234]
+      );
 
       await expect(
         timelock.queue(await target.getAddress(), 0, sig, data, eta)
@@ -145,7 +152,9 @@ describe('GenericTimelock', function () {
 
       await expect(
         timelock.execute(await target.getAddress(), 0, sig, data, eta)
-      ).to.emit(target, 'ValueSet').withArgs(1234);
+      )
+        .to.emit(target, 'ValueSet')
+        .withArgs(1234);
 
       expect(await target.value()).to.equal(1234n);
     });
@@ -212,7 +221,10 @@ describe('GenericTimelock', function () {
         [7 * DAY]
       );
       const sig2 = 'setValue(uint256)';
-      const data2 = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [999]);
+      const data2 = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [999]
+      );
 
       await timelock.queue(await handler.getAddress(), 0, sig1, data1, eta);
       await timelock.queue(await target.getAddress(), 0, sig2, data2, eta);
@@ -234,13 +246,7 @@ describe('GenericTimelock', function () {
       const preencoded = target.interface.encodeFunctionData('setValue', [55]);
       await timelock.queue(await target.getAddress(), 0, '', preencoded, eta);
       await increaseTime(DELAY + 2);
-      await timelock.execute(
-        await target.getAddress(),
-        0,
-        '',
-        preencoded,
-        eta
-      );
+      await timelock.execute(await target.getAddress(), 0, '', preencoded, eta);
       expect(await target.value()).to.equal(55n);
     });
   });
@@ -263,7 +269,13 @@ describe('GenericTimelock', function () {
     it('cannot cancel a non-queued op', async function () {
       const eta = (await now()) + DELAY + 1;
       await expect(
-        timelock.cancel(await target.getAddress(), 0, 'setValue(uint256)', '0x', eta)
+        timelock.cancel(
+          await target.getAddress(),
+          0,
+          'setValue(uint256)',
+          '0x',
+          eta
+        )
       ).to.be.revertedWithCustomError(timelock, 'OperationNotQueued');
     });
   });
@@ -337,14 +349,9 @@ describe('GenericTimelock', function () {
       const value = ethers.parseEther('0.1');
       await timelock.queue(await target.getAddress(), value, sig, data, eta);
       await increaseTime(DELAY + 2);
-      await timelock.execute(
-        await target.getAddress(),
+      await timelock.execute(await target.getAddress(), value, sig, data, eta, {
         value,
-        sig,
-        data,
-        eta,
-        { value }
-      );
+      });
       expect(await target.etherReceived()).to.equal(value);
     });
 
@@ -356,14 +363,9 @@ describe('GenericTimelock', function () {
       await timelock.queue(await target.getAddress(), value, sig, data, eta);
       await increaseTime(DELAY + 2);
       await expect(
-        timelock.execute(
-          await target.getAddress(),
-          value,
-          sig,
-          data,
-          eta,
-          { value: ethers.parseEther('0.05') }
-        )
+        timelock.execute(await target.getAddress(), value, sig, data, eta, {
+          value: ethers.parseEther('0.05'),
+        })
       ).to.be.revertedWithCustomError(timelock, 'CallReverted');
     });
   });
@@ -390,10 +392,10 @@ describe('GenericTimelock', function () {
     });
 
     it('rejects out-of-bounds delay', async function () {
-      await expect(timelock.setDelay(DAY - 1)).to.be.revertedWithCustomError(
-        timelock,
-        'DelayOutOfBounds'
-      );
+      // Exactly MIN_DELAY - 1 and MAX_DELAY + 1
+      await expect(
+        timelock.setDelay(2 * DAY - 1)
+      ).to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds');
       await expect(
         timelock.setDelay(30 * DAY + 1)
       ).to.be.revertedWithCustomError(timelock, 'DelayOutOfBounds');
@@ -509,7 +511,9 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
   });
 
   it('rejects direct admin calls on all three handlers (post-transfer sanity)', async function () {
-    await expect(handler.setWithdrawPeriod(3 * DAY)).to.be.revertedWithCustomError(
+    await expect(
+      handler.setWithdrawPeriod(3 * DAY)
+    ).to.be.revertedWithCustomError(
       handler,
       'AccessControlUnauthorizedAccount'
     );
@@ -558,12 +562,24 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
       let eta = (await now()) + DELAY + 5;
       await timelock.queue(await minter.getAddress(), 0, 'pause()', '0x', eta);
       await increaseTime(DELAY + 10);
-      await timelock.execute(await minter.getAddress(), 0, 'pause()', '0x', eta);
+      await timelock.execute(
+        await minter.getAddress(),
+        0,
+        'pause()',
+        '0x',
+        eta
+      );
       expect(await minter.paused()).to.equal(true);
 
       // Unpause with a fresh eta
       eta = (await now()) + DELAY + 5;
-      await timelock.queue(await minter.getAddress(), 0, 'unpause()', '0x', eta);
+      await timelock.queue(
+        await minter.getAddress(),
+        0,
+        'unpause()',
+        '0x',
+        eta
+      );
       await increaseTime(DELAY + 10);
       await timelock.execute(
         await minter.getAddress(),
@@ -578,7 +594,10 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
     it('outsider cannot bypass the timelock by calling minter directly', async function () {
       await expect(
         minter.connect(outsider).setMintLimitPerBlock(1n)
-      ).to.be.revertedWithCustomError(minter, 'AccessControlUnauthorizedAccount');
+      ).to.be.revertedWithCustomError(
+        minter,
+        'AccessControlUnauthorizedAccount'
+      );
     });
   });
 
@@ -619,7 +638,10 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
     it('setPriceThreshold via timelock (guarded by internal 10% cap)', async function () {
       const eta = (await now()) + DELAY + 5;
       const sig = 'setPriceThreshold(uint256)';
-      const data = ethers.AbiCoder.defaultAbiCoder().encode(['uint256'], [200n]);
+      const data = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['uint256'],
+        [200n]
+      );
       await timelock.queue(await redeem.getAddress(), 0, sig, data, eta);
       await increaseTime(DELAY + 10);
       await timelock.execute(await redeem.getAddress(), 0, sig, data, eta);
@@ -907,13 +929,7 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
       );
 
       for (const c of [handler, minter, redeem]) {
-        await timelock.queue(
-          await c.getAddress(),
-          0,
-          grantSig,
-          grantData,
-          eta
-        );
+        await timelock.queue(await c.getAddress(), 0, grantSig, grantData, eta);
         await timelock.queue(
           await c.getAddress(),
           0,
@@ -1020,7 +1036,9 @@ describe('GenericTimelock — multi-contract control (WithdrawalHandler + Minter
       ).to.be.revertedWithCustomError(timelock, 'OperationNotReady');
 
       // Role still not granted
-      expect(await handler.hasRole(adminRole, outsider.address)).to.equal(false);
+      expect(await handler.hasRole(adminRole, outsider.address)).to.equal(
+        false
+      );
 
       await increaseTime(DELAY + 10);
       await timelock.execute(await handler.getAddress(), 0, sig, data, eta);
