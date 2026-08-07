@@ -3,13 +3,20 @@ pragma solidity 0.8.28;
 
 import "../lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "../interfaces/IStakedUSNBasicOFT.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
 
-contract StakedUSNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IStakedUSNBasicOFT, IMessageRecipient {
+contract StakedUSNOFTHyperlane is
+    OFTUpgradeable,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    IStakedUSNBasicOFT,
+    IMessageRecipient
+{
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
     uint8 public constant VERSION = 1;
 
@@ -26,8 +33,17 @@ contract StakedUSNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, ISta
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __OFT_init(_name, _symbol, _owner);
         __Ownable_init(_owner);
+        __Pausable_init();
         _grantRole(DEFAULT_ADMIN_ROLE, _owner);
         _grantRole(BLACKLIST_MANAGER_ROLE, _owner);
+    }
+
+    function pause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 
     function blacklistAccount(address account) external onlyRole(BLACKLIST_MANAGER_ROLE) {
@@ -40,7 +56,7 @@ contract StakedUSNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, ISta
         emit Unblacklisted(account);
     }
 
-    function _update(address from, address to, uint256 amount) internal virtual override {
+    function _update(address from, address to, uint256 amount) internal virtual override whenNotPaused {
         if (blacklist[from] || blacklist[to]) revert BlacklistedAddress();
         super._update(from, to, amount);
     }
