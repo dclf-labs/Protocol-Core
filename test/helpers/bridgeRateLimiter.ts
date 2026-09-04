@@ -1,4 +1,8 @@
 import { ethers, network } from 'hardhat';
+import type {
+  USNUpgradeableHyperlane,
+  StakedUSNOFTHyperlane,
+} from '../typechain-types';
 
 export const TRANSPORT_LZ = 0;
 export const TRANSPORT_HYPERLANE = 1;
@@ -14,11 +18,9 @@ export function encodeOFTMsg(recipient: string, amountLD: bigint): string {
   return ethers.concat([recipientB32, ethers.toBeHex(amountSD, 8)]);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function lzReceiveAs(
   endpointAddress: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  token: any,
+  token: USNUpgradeableHyperlane | StakedUSNOFTHyperlane,
   srcEid: number,
   peerAddress: string,
   recipientAddress: string,
