@@ -21,7 +21,10 @@ export function encodeOFTMsg(recipient: string, amountLD: bigint): string {
 
 export async function lzReceiveAs(
   endpointAddress: string,
-  token: USNUpgradeableHyperlane | StakedUSNOFTHyperlane | StakingVaultOFTUpgradeableHyperlane,
+  token:
+    | USNUpgradeableHyperlane
+    | StakedUSNOFTHyperlane
+    | StakingVaultOFTUpgradeableHyperlane,
   srcEid: number,
   peerAddress: string,
   recipientAddress: string,

@@ -42,7 +42,12 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
     );
     const proxy = await upgrades.deployProxy(
       Factory,
-      [await asset.getAddress(), 'Staked Vault', 'sVLT', await owner.getAddress()],
+      [
+        await asset.getAddress(),
+        'Staked Vault',
+        'sVLT',
+        await owner.getAddress(),
+      ],
       {
         initializer: 'initialize',
         constructorArgs: [await endpoint.getAddress()],
@@ -72,8 +77,12 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
     )) as unknown as MockERC20;
 
     const EndpointFactory = await ethers.getContractFactory('EndpointV2Mock');
-    endpointSrc = (await EndpointFactory.deploy(CHAIN_ID_SRC)) as unknown as EndpointV2Mock;
-    endpointDst = (await EndpointFactory.deploy(CHAIN_ID_DST)) as unknown as EndpointV2Mock;
+    endpointSrc = (await EndpointFactory.deploy(
+      CHAIN_ID_SRC
+    )) as unknown as EndpointV2Mock;
+    endpointDst = (await EndpointFactory.deploy(
+      CHAIN_ID_DST
+    )) as unknown as EndpointV2Mock;
 
     const MailboxFactory = await ethers.getContractFactory('MockMailbox');
     mockMailbox = (await MailboxFactory.deploy()) as unknown as MockMailbox;
@@ -254,9 +263,7 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
         ethers.zeroPadValue(ethers.toBeHex(LIMIT + ONE), 32),
       ]);
       await expect(
-        vaultSrc
-          .connect(mailboxSigner)
-          .handle(HL_DOMAIN, remoteToken, message)
+        vaultSrc.connect(mailboxSigner).handle(HL_DOMAIN, remoteToken, message)
       ).to.be.revertedWithCustomError(vaultSrc, 'RateLimitExceeded');
       expect(await vaultSrc.balanceOf(await user.getAddress())).to.equal(
         balBefore
@@ -287,11 +294,9 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
       };
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
       await expect(
-        vaultSrc
-          .connect(user)
-          .send(sendParam, fee, await user.getAddress(), {
-            value: fee.nativeFee,
-          })
+        vaultSrc.connect(user).send(sendParam, fee, await user.getAddress(), {
+          value: fee.nativeFee,
+        })
       ).to.not.be.reverted;
       expect(await vaultSrc.balanceOf(await user.getAddress())).to.be.lt(
         balBefore
@@ -323,7 +328,11 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
       await expect(
         vaultSrc
           .connect(user)
-          .send(sendParam, { nativeFee: 0n, lzTokenFee: 0n }, await user.getAddress())
+          .send(
+            sendParam,
+            { nativeFee: 0n, lzTokenFee: 0n },
+            await user.getAddress()
+          )
       ).to.be.revertedWithCustomError(vaultSrc, 'RateLimitExceeded');
       expect(await vaultSrc.balanceOf(await user.getAddress())).to.equal(
         balBefore

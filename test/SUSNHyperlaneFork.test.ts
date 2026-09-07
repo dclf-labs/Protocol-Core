@@ -30,12 +30,18 @@ const EIP1967_ADMIN_SLOT =
 // collide with any pre-existing storage.
 
 const RAW_SLOTS = {
-  erc4626Asset:       '0x0773e532dfede91f04b12a73d3d2acd361424f41f76b4fb79f090161e36b4e00',
-  erc20TotalSupply:   '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
-  ownableOwner:       '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
-  lzEndpoint:         '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
-  reentrancyStatus:   '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
-  bridgeRateLimiter:  '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
+  erc4626Asset:
+    '0x0773e532dfede91f04b12a73d3d2acd361424f41f76b4fb79f090161e36b4e00',
+  erc20TotalSupply:
+    '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
+  ownableOwner:
+    '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
+  lzEndpoint:
+    '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
+  reentrancyStatus:
+    '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
+  bridgeRateLimiter:
+    '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
 } as const;
 
 const PROXY_ADMIN_ABI = [
@@ -107,16 +113,37 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
 
     // 3. Snapshot raw storage slots before the upgrade
     rawBefore = {
-      erc4626Asset:      await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.erc4626Asset),
-      erc20TotalSupply:  await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.erc20TotalSupply),
-      ownableOwner:      await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.ownableOwner),
-      lzEndpoint:        await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.lzEndpoint),
-      reentrancyStatus:  await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.reentrancyStatus),
-      bridgeRateLimiter: await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+      erc4626Asset: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.erc4626Asset
+      ),
+      erc20TotalSupply: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.erc20TotalSupply
+      ),
+      ownableOwner: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.ownableOwner
+      ),
+      lzEndpoint: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.lzEndpoint
+      ),
+      reentrancyStatus: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.reentrancyStatus
+      ),
+      bridgeRateLimiter: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.bridgeRateLimiter
+      ),
     };
 
     // 4. Locate ProxyAdmin and its controller via EIP-1967 admin slot
-    const raw = await ethers.provider.getStorage(SUSN_PROXY, EIP1967_ADMIN_SLOT);
+    const raw = await ethers.provider.getStorage(
+      SUSN_PROXY,
+      EIP1967_ADMIN_SLOT
+    );
     const proxyAdminAddr = ethers.getAddress('0x' + raw.slice(-40));
     const proxyAdmin = new ethers.Contract(
       proxyAdminAddr,
@@ -145,12 +172,30 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
 
     // 7. Re-snapshot raw storage slots after the upgrade
     rawAfter = {
-      erc4626Asset:      await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.erc4626Asset),
-      erc20TotalSupply:  await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.erc20TotalSupply),
-      ownableOwner:      await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.ownableOwner),
-      lzEndpoint:        await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.lzEndpoint),
-      reentrancyStatus:  await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.reentrancyStatus),
-      bridgeRateLimiter: await ethers.provider.getStorage(SUSN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+      erc4626Asset: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.erc4626Asset
+      ),
+      erc20TotalSupply: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.erc20TotalSupply
+      ),
+      ownableOwner: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.ownableOwner
+      ),
+      lzEndpoint: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.lzEndpoint
+      ),
+      reentrancyStatus: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.reentrancyStatus
+      ),
+      bridgeRateLimiter: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.bridgeRateLimiter
+      ),
     };
   });
 

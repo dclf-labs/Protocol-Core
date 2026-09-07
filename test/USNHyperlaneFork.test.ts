@@ -29,11 +29,16 @@ const EIP1967_ADMIN_SLOT =
 // collide with any pre-existing storage.
 
 const RAW_SLOTS = {
-  erc20TotalSupply:   '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
-  ownableOwner:       '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
-  lzEndpoint:         '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
-  reentrancyStatus:   '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
-  bridgeRateLimiter:  '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
+  erc20TotalSupply:
+    '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
+  ownableOwner:
+    '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
+  lzEndpoint:
+    '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
+  reentrancyStatus:
+    '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
+  bridgeRateLimiter:
+    '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
 } as const;
 
 const PROXY_ADMIN_ABI = [
@@ -95,11 +100,26 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
 
     // 2. Snapshot raw storage slots before the upgrade
     rawBefore = {
-      erc20TotalSupply:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.erc20TotalSupply),
-      ownableOwner:      await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.ownableOwner),
-      lzEndpoint:        await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.lzEndpoint),
-      reentrancyStatus:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.reentrancyStatus),
-      bridgeRateLimiter: await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+      erc20TotalSupply: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.erc20TotalSupply
+      ),
+      ownableOwner: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.ownableOwner
+      ),
+      lzEndpoint: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.lzEndpoint
+      ),
+      reentrancyStatus: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.reentrancyStatus
+      ),
+      bridgeRateLimiter: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.bridgeRateLimiter
+      ),
     };
 
     // 3. Snapshot every piece of state we care about preserving
@@ -147,11 +167,26 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
 
     // 6. Re-snapshot raw storage slots after the upgrade
     rawAfter = {
-      erc20TotalSupply:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.erc20TotalSupply),
-      ownableOwner:      await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.ownableOwner),
-      lzEndpoint:        await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.lzEndpoint),
-      reentrancyStatus:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.reentrancyStatus),
-      bridgeRateLimiter: await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+      erc20TotalSupply: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.erc20TotalSupply
+      ),
+      ownableOwner: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.ownableOwner
+      ),
+      lzEndpoint: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.lzEndpoint
+      ),
+      reentrancyStatus: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.reentrancyStatus
+      ),
+      bridgeRateLimiter: await ethers.provider.getStorage(
+        USN_PROXY,
+        RAW_SLOTS.bridgeRateLimiter
+      ),
     };
   });
 
