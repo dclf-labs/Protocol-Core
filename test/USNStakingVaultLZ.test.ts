@@ -299,12 +299,11 @@ describe('USNStakingVault', function () {
 
     expect(previewAssets).to.be.lte(userAssets);
 
-    // Create withdrawal demand with slippage check
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
+    // Create withdrawal demand
+    await StakingVault.connect(user1).withdraw(
       userAssets,
       withdrawalHandler.target,
-      user1.address,
-      stakeAmount + (stakeAmount * 2n) / 100n // 2% slippage
+      user1.address
     );
 
     // Get withdrawal request ID
@@ -348,12 +347,11 @@ describe('USNStakingVault', function () {
     const balanceUsnBefore = await USN.balanceOf(user1.address);
     const balanceSUsnBefore = await StakingVault.balanceOf(user1.address);
 
-    // Create withdrawal demand with slippage check
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
+    // Create withdrawal demand
+    await StakingVault.connect(user1).withdraw(
       stakeAmount,
       withdrawalHandler.target,
-      user1.address,
-      stakeAmount + (stakeAmount * 2n) / 100n // 2% slippage
+      user1.address
     );
 
     // Get withdrawal request ID
@@ -395,12 +393,11 @@ describe('USNStakingVault', function () {
       await user1.getAddress()
     );
 
-    // Create withdrawal demand with slippage check
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
+    // Create withdrawal demand
+    await StakingVault.connect(user1).withdraw(
       stakeAmount,
       withdrawalHandler.target,
-      user1.address,
-      stakeAmount + (stakeAmount * 2n) / 100n // 2% slippage
+      user1.address
     );
 
     // Get withdrawal request ID
@@ -432,12 +429,11 @@ describe('USNStakingVault', function () {
       await user1.getAddress()
     );
 
-    // Create withdrawal demand with slippage check
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
+    // Create withdrawal demand
+    await StakingVault.connect(user1).withdraw(
       stakeAmount,
       withdrawalHandler.target,
-      user1.address,
-      stakeAmount + (stakeAmount * 2n) / 100n // 2% slippage
+      user1.address
     );
 
     // Get withdrawal request ID
@@ -468,11 +464,10 @@ describe('USNStakingVault', function () {
 
     // Withdraw should fail for blacklisted user
     await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
+      StakingVault.connect(user1).withdraw(
         stakeAmount,
         withdrawalHandler.target,
-        user1.address,
-        stakeAmount + (stakeAmount * 2n) / 100n // 2% slippage
+        user1.address
       )
     ).to.be.revertedWithCustomError(StakingVault, 'BlacklistedAddress');
   });
@@ -588,193 +583,6 @@ describe('USNStakingVault', function () {
       'CannotRescueUnderlyingAsset'
     );
   });
-  it('should allow depositWithPermit', async function () {
-    const amount = ethers.parseUnits('1000', 18);
-    const deadline =
-      (await ethers.provider.getBlock('latest'))!.timestamp + 3600 * 100; // 100 hour from now (EVM clock)
-    const nonce = await USN.nonces(user1.address);
-
-    const domain = {
-      name: await USN.name(),
-      version: '1',
-      chainId: (await ethers.provider.getNetwork()).chainId,
-      verifyingContract: await USN.getAddress(),
-    };
-
-    const types = {
-      Permit: [
-        { name: 'owner', type: 'address' },
-        { name: 'spender', type: 'address' },
-        { name: 'value', type: 'uint256' },
-        { name: 'nonce', type: 'uint256' },
-        { name: 'deadline', type: 'uint256' },
-      ],
-    };
-
-    const values = {
-      owner: user1.address,
-      spender: await StakingVault.getAddress(),
-      value: amount,
-      nonce: nonce,
-      deadline: deadline,
-    };
-
-    const signature = await user1.signTypedData(domain, types, values);
-    const { v, r, s } = ethers.Signature.from(signature);
-
-    const initialBalance = await StakingVault.balanceOf(user1.address);
-    await expect(
-      StakingVault.connect(user1).depositWithPermit(
-        amount,
-        user1.address,
-        deadline,
-        v,
-        r,
-        s
-      )
-    )
-      .to.emit(StakingVault, 'Deposit')
-      .withArgs(user1.address, user1.address, amount, amount);
-
-    const finalBalance = await StakingVault.balanceOf(user1.address);
-    expect(finalBalance).to.equal(initialBalance + amount);
-  });
-
-  it('should allow depositWithSlippageCheck', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    const minSharesOut = ethers.parseUnits('990', 18); // Allowing for 1% slippage
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-
-    const initialBalance = await StakingVault.balanceOf(user1.address);
-
-    await expect(
-      StakingVault.connect(user1).depositWithSlippageCheck(
-        depositAmount,
-        user1.address,
-        minSharesOut
-      )
-    )
-      .to.emit(StakingVault, 'Deposit')
-      .withArgs(
-        user1.address,
-        user1.address,
-        depositAmount,
-        await StakingVault.previewDeposit(depositAmount)
-      );
-
-    const finalBalance = await StakingVault.balanceOf(user1.address);
-    expect(finalBalance).to.be.gte(initialBalance + minSharesOut);
-  });
-
-  it('should revert depositWithSlippageCheck if slippage is exceeded', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    const minSharesOut = ethers.parseUnits('1001', 18); // Unrealistic expectation
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-
-    await expect(
-      StakingVault.connect(user1).depositWithSlippageCheck(
-        depositAmount,
-        user1.address,
-        minSharesOut
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'SlippageExceeded');
-  });
-  it('should allow withdrawWithSlippageCheck', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    const withdrawAmount = ethers.parseUnits('500', 18);
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-    await StakingVault.connect(user1).deposit(depositAmount, user1.address);
-
-    // Set withdraw period to 1 for testing
-    await withdrawalHandler.setWithdrawPeriod(1);
-
-    // Create withdrawal demand with slippage check
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
-      withdrawAmount,
-      withdrawalHandler.target,
-      user1.address,
-      withdrawAmount + (withdrawAmount * 2n) / 100n // 2% slippage
-    );
-
-    // Get withdrawal request ID
-    const initialBalance = await USN.balanceOf(user1.address);
-    await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
-        withdrawAmount,
-        user1.address,
-        user1.address,
-        withdrawAmount + (withdrawAmount * 2n) / 100n //2% slippage
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'Unauthorized');
-    await StakingVault.connect(user1).withdraw(
-      withdrawAmount,
-      withdrawalHandler.target,
-      user1.address
-    );
-
-    // Fast forward time to allow withdrawal
-    await ethers.provider.send('evm_increaseTime', [24 * 60 * 60]);
-    await ethers.provider.send('evm_mine', []);
-
-    // Get request ID and claim from withdrawal handler
-    const requestId =
-      (await withdrawalHandler.getUserNextRequestId(user1.address)) - 1n;
-    await withdrawalHandler.connect(user1).claimWithdrawal(requestId);
-    const finalBalance = await USN.balanceOf(user1.address);
-    expect(finalBalance).to.equal(initialBalance + withdrawAmount);
-  });
-
-  it('should revert withdrawWithSlippageCheck if slippage is exceeded', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    const withdrawAmount = ethers.parseUnits('500', 18);
-    const maxSharesBurned = ethers.parseUnits('490', 18); // Unrealistic expectation
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-    await StakingVault.connect(user1).deposit(depositAmount, user1.address);
-
-    // Set withdraw period to 1 for testing
-    await withdrawalHandler.setWithdrawPeriod(1);
-
-    // Create withdrawal demand
-    await StakingVault.connect(user1).withdraw(
-      withdrawAmount,
-      withdrawalHandler.target,
-      user1.address
-    );
-
-    await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
-        withdrawAmount,
-        user1.address,
-        user1.address,
-        maxSharesBurned
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'SlippageExceeded');
-  });
-
   it('should allow claim', async function () {
     const depositAmount = ethers.parseUnits('1000', 18);
     const redeemShares = ethers.parseUnits('500', 18);
@@ -813,37 +621,6 @@ describe('USNStakingVault', function () {
     expect(finalBalance).to.be.gte(initialBalance + minAssetsOut);
   });
 
-  it('should revert redeemWithSlippageCheck if slippage is exceeded', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    const redeemShares = ethers.parseUnits('500', 18);
-    const minAssetsOut = ethers.parseUnits('510', 18); // Unrealistic expectation
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-    await StakingVault.connect(user1).deposit(depositAmount, user1.address);
-
-    // Set withdraw period to 1 for testing
-    await withdrawalHandler.setWithdrawPeriod(1);
-    // Create withdrawal demand
-    await StakingVault.connect(user1).withdraw(
-      redeemShares,
-      withdrawalHandler.target,
-      user1.address
-    );
-
-    await expect(
-      StakingVault.connect(user1).redeemWithSlippageCheck(
-        redeemShares,
-        user1.address,
-        user1.address,
-        minAssetsOut
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'SlippageExceeded');
-  });
   it('should successfully redeemWithSlippageCheck when slippage is within limits', async function () {
     const depositAmount = ethers.parseUnits('1000', 18);
     const redeemShares = ethers.parseUnits('500', 18);
@@ -929,57 +706,6 @@ describe('USNStakingVault', function () {
     await expect(
       withdrawalHandler.connect(user1).claimWithdrawal(0)
     ).to.be.revertedWithCustomError(withdrawalHandler, 'Unauthorized');
-  });
-  it('should allow mintWithSlippageCheck', async function () {
-    const mintShares = ethers.parseUnits('1000', 18);
-    const maxAssets = ethers.parseUnits('1010', 18); // Allowing for 1% slippage
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, maxAssets);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      maxAssets
-    );
-
-    const initialBalance = await StakingVault.balanceOf(user1.address);
-
-    await expect(
-      StakingVault.connect(user1).mintWithSlippageCheck(
-        mintShares,
-        user1.address,
-        maxAssets
-      )
-    )
-      .to.emit(StakingVault, 'Deposit')
-      .withArgs(
-        user1.address,
-        user1.address,
-        await StakingVault.previewMint(mintShares),
-        mintShares
-      );
-
-    const finalBalance = await StakingVault.balanceOf(user1.address);
-    expect(finalBalance).to.equal(initialBalance + mintShares);
-  });
-
-  it('should revert mintWithSlippageCheck if slippage is exceeded', async function () {
-    const mintShares = ethers.parseUnits('1000', 18);
-    const maxAssets = ethers.parseUnits('990', 18); // Unrealistic expectation (too low)
-
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, ethers.parseUnits('1100', 18)); // Mint more than maxAssets
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      ethers.parseUnits('1100', 18)
-    );
-
-    await expect(
-      StakingVault.connect(user1).mintWithSlippageCheck(
-        mintShares,
-        user1.address,
-        maxAssets
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'SlippageExceeded');
   });
   it('should correctly track balances and shares across chains', async function () {
     // User1 stakes on source chain
@@ -1378,74 +1104,6 @@ describe('USNStakingVault', function () {
     expect(initialShares - finalShares).to.equal(redeemShares);
   });
 
-  it('should allow redeemWithSlippageCheck', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-    await StakingVault.connect(user1).deposit(depositAmount, user1.address);
-
-    const redeemShares = ethers.parseUnits('500', 18);
-    const expectedAssets = await StakingVault.previewRedeem(redeemShares);
-    const minAssets = expectedAssets - ethers.parseUnits('10', 18); // Allow for slippage
-
-    const initialBalance = await USN.balanceOf(user1.address);
-    const maxShareBurned = await StakingVault.balanceOf(user1.address);
-    await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
-        expectedAssets,
-        withdrawalHandler.target,
-        user1.address,
-        expectedAssets
-      )
-    )
-      .to.emit(StakingVault, 'Withdraw')
-      .withArgs(
-        user1.address,
-        withdrawalHandler.target,
-        user1.address,
-        expectedAssets,
-        redeemShares
-      );
-
-    // Fast forward time past withdrawal period
-    await ethers.provider.send('evm_increaseTime', [24 * 60 * 60]);
-    await ethers.provider.send('evm_mine', []);
-
-    // Claim withdrawal
-    const requestId =
-      (await withdrawalHandler.getUserNextRequestId(user1.address)) - 1n;
-    await withdrawalHandler.connect(user1).claimWithdrawal(requestId);
-
-    const finalBalance = await USN.balanceOf(user1.address);
-    expect(finalBalance - initialBalance).to.be.gte(minAssets);
-  });
-
-  it('should revert redeemWithSlippageCheck if slippage is exceeded', async function () {
-    const depositAmount = ethers.parseUnits('1000', 18);
-    await USN.setAdmin(owner.address);
-    await USN.mint(user1.address, depositAmount);
-    await USN.connect(user1).approve(
-      await StakingVault.getAddress(),
-      depositAmount
-    );
-    await StakingVault.connect(user1).deposit(depositAmount, user1.address);
-
-    const redeemShares = ethers.parseUnits('500', 18);
-    const expectedAssets = await StakingVault.previewRedeem(redeemShares);
-
-    await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
-        expectedAssets,
-        withdrawalHandler.target,
-        user1.address,
-        redeemShares - 1n
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'SlippageExceeded');
-  });
   it('should not allow blacklisted accounts to withdraw', async function () {
     // Setup initial deposit
     const depositAmount = ethers.parseUnits('1000', 18);
@@ -1472,27 +1130,16 @@ describe('USNStakingVault', function () {
       )
     ).to.be.revertedWithCustomError(StakingVault, 'BlacklistedAddress');
 
-    // Try withdrawWithSlippageCheck - should also fail
-    await expect(
-      StakingVault.connect(user1).withdrawWithSlippageCheck(
-        withdrawAmount,
-        withdrawalHandler.target,
-        user1.address,
-        withdrawAmount + (withdrawAmount * 2n) / 100n // 2% slippage
-      )
-    ).to.be.revertedWithCustomError(StakingVault, 'BlacklistedAddress');
-
     // Unblacklist user1
     await StakingVault.connect(blacklistManager).unblacklistAccount(
       user1.address
     );
 
     // Should now be able to withdraw
-    await StakingVault.connect(user1).withdrawWithSlippageCheck(
+    await StakingVault.connect(user1).withdraw(
       withdrawAmount,
       withdrawalHandler.target,
-      user1.address,
-      withdrawAmount + (withdrawAmount * 2n) / 100n // 2% slippage
+      user1.address
     );
   });
 

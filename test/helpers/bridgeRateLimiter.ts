@@ -2,6 +2,7 @@ import { ethers, network } from 'hardhat';
 import type {
   USNUpgradeableHyperlane,
   StakedUSNOFTHyperlane,
+  StakingVaultOFTUpgradeableHyperlane,
 } from '../typechain-types';
 
 export const TRANSPORT_LZ = 0;
@@ -20,7 +21,7 @@ export function encodeOFTMsg(recipient: string, amountLD: bigint): string {
 
 export async function lzReceiveAs(
   endpointAddress: string,
-  token: USNUpgradeableHyperlane | StakedUSNOFTHyperlane,
+  token: USNUpgradeableHyperlane | StakedUSNOFTHyperlane | StakingVaultOFTUpgradeableHyperlane,
   srcEid: number,
   peerAddress: string,
   recipientAddress: string,

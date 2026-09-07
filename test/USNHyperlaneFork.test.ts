@@ -13,6 +13,29 @@ const SOPHON_EID = 30225;
 const EIP1967_ADMIN_SLOT =
   '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103';
 
+// ── ERC-7201 storage slot roots ───────────────────────────────────────────────
+//
+// Each entry is the first word of a storage namespace. Reading these via
+// provider.getStorage() returns raw bytes rather than ABI-decoded values, so
+// layout shifts that coincidentally decode correctly through the ABI are still
+// caught. Slots with non-zero first-word scalars are chosen for maximum signal:
+//
+//   ERC20   root+2     = _totalSupply   (uint256; root+0 is a mapping ≡ 0)
+//   Ownable root+0     = _owner address
+//   OAppCore root+0    = endpoint address
+//   ReentrancyGuard root+0 = _status uint256 (1 = NOT_ENTERED)
+//
+// The BridgeRateLimiter slot must be zero pre-upgrade to prove it does not
+// collide with any pre-existing storage.
+
+const RAW_SLOTS = {
+  erc20TotalSupply:   '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
+  ownableOwner:       '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
+  lzEndpoint:         '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
+  reentrancyStatus:   '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
+  bridgeRateLimiter:  '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
+} as const;
+
 const PROXY_ADMIN_ABI = [
   'function owner() view returns (address)',
   'function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable',
@@ -36,6 +59,11 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
   let proxy: USNUpgradeableHyperlane;
 
   // Pre-upgrade state snapshot — all read before the implementation is swapped
+  // Raw storage slot snapshots — bytes32 values read directly from the proxy
+  // storage trie, independent of the contract ABI
+  let rawBefore: Record<keyof typeof RAW_SLOTS, string>;
+  let rawAfter: Record<keyof typeof RAW_SLOTS, string>;
+
   let snap: {
     totalSupply: bigint;
     owner: string;
@@ -65,7 +93,16 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       USN_PROXY
     )) as unknown as USNUpgradeableHyperlane;
 
-    // 2. Snapshot every piece of state we care about preserving
+    // 2. Snapshot raw storage slots before the upgrade
+    rawBefore = {
+      erc20TotalSupply:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.erc20TotalSupply),
+      ownableOwner:      await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.ownableOwner),
+      lzEndpoint:        await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.lzEndpoint),
+      reentrancyStatus:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.reentrancyStatus),
+      bridgeRateLimiter: await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+    };
+
+    // 3. Snapshot every piece of state we care about preserving
     const adminAddr = await proxy.admin();
     snap = {
       totalSupply: await proxy.totalSupply(),
@@ -80,7 +117,7 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       adminBlacklisted: await proxy.blacklist(adminAddr),
     };
 
-    // 3. Locate ProxyAdmin and its controller via EIP-1967 admin slot
+    // 4. Locate ProxyAdmin and its controller via EIP-1967 admin slot
     const raw = await ethers.provider.getStorage(USN_PROXY, EIP1967_ADMIN_SLOT);
     const proxyAdminAddr = ethers.getAddress('0x' + raw.slice(-40));
     const proxyAdmin = new ethers.Contract(
@@ -107,6 +144,15 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
     await proxyAdmin
       .connect(adminOwnerSigner)
       .upgradeAndCall(USN_PROXY, await newImpl.getAddress(), '0x');
+
+    // 6. Re-snapshot raw storage slots after the upgrade
+    rawAfter = {
+      erc20TotalSupply:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.erc20TotalSupply),
+      ownableOwner:      await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.ownableOwner),
+      lzEndpoint:        await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.lzEndpoint),
+      reentrancyStatus:  await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.reentrancyStatus),
+      bridgeRateLimiter: await ethers.provider.getStorage(USN_PROXY, RAW_SLOTS.bridgeRateLimiter),
+    };
   });
 
   // ── Storage preservation ──────────────────────────────────────────────────
@@ -151,6 +197,42 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
 
   it('mailbox address is unchanged after upgrade', async function () {
     expect(await proxy.mailbox()).to.equal(snap.mailbox);
+  });
+
+  // ── Storage layout — raw slot validation ─────────────────────────────────
+  //
+  // These assertions read bytes32 values directly from the proxy storage trie,
+  // bypassing the ABI. A layout shift that coincidentally decodes to the same
+  // value through the ABI would still fail here because the raw bytes differ.
+  //
+  // The BridgeRateLimiter check specifically proves that its ERC-7201 slot
+  // (keccak256("noon.storage.bridgeratelimiter") − 1, masked) did not overlap
+  // any slot already occupied in the pre-upgrade proxy.
+
+  describe('storage layout — raw slot validation', function () {
+    it('BridgeRateLimiter ERC-7201 slot was zero pre-upgrade (no collision with existing storage)', async function () {
+      expect(rawBefore.bridgeRateLimiter).to.equal(ethers.ZeroHash);
+    });
+
+    it('ERC20 totalSupply slot is byte-identical after upgrade', async function () {
+      expect(rawAfter.erc20TotalSupply).to.equal(rawBefore.erc20TotalSupply);
+      expect(rawBefore.erc20TotalSupply).to.not.equal(ethers.ZeroHash);
+    });
+
+    it('Ownable owner slot is byte-identical after upgrade', async function () {
+      expect(rawAfter.ownableOwner).to.equal(rawBefore.ownableOwner);
+      expect(rawBefore.ownableOwner).to.not.equal(ethers.ZeroHash);
+    });
+
+    it('LZ endpoint slot is byte-identical after upgrade', async function () {
+      expect(rawAfter.lzEndpoint).to.equal(rawBefore.lzEndpoint);
+      expect(rawBefore.lzEndpoint).to.not.equal(ethers.ZeroHash);
+    });
+
+    it('ReentrancyGuard status slot is byte-identical after upgrade', async function () {
+      expect(rawAfter.reentrancyStatus).to.equal(rawBefore.reentrancyStatus);
+      expect(rawBefore.reentrancyStatus).to.not.equal(ethers.ZeroHash);
+    });
   });
 
   // ── Rate limiter wired up on the upgraded proxy ───────────────────────────

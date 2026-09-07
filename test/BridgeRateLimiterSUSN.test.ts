@@ -147,6 +147,20 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
         .to.emit(tokenSrc, 'RateLimitSet')
         .withArgs(TRANSPORT_HYPERLANE, HL_DOMAIN, true, LIMIT, WINDOW);
     });
+
+    it('reverts with InvalidTransport for unknown transport value', async function () {
+      await expect(
+        tokenSrc.setRateLimits([
+          {
+            transport: 2, // > TRANSPORT_HYPERLANE (1)
+            remoteId: HL_DOMAIN,
+            outbound: true,
+            limit: LIMIT,
+            window: WINDOW,
+          },
+        ])
+      ).to.be.revertedWithCustomError(tokenSrc, 'InvalidTransport');
+    });
   });
 
   // ── Hyperlane outbound ───────────────────────────────────────────────────
@@ -400,6 +414,24 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
       );
       expect(available).to.equal(LIMIT);
     });
+
+    it('decay rate is proportional to limit, not in-flight amount (LZ formula)', async function () {
+      // Send well under limit (20 of 50), then wait half the window.
+      // LZ: decay = limit * elapsed / window = 50 * 43200 / 86400 = 25.
+      // Since inFlight(20) <= decay(25), currentInFlight = 0 → available = limit.
+      // The old formula (inFlight * elapsed / window = 10) would give available = 40.
+      const sendAmount = ethers.parseUnits('20', 18);
+      await tokenSrc
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, sendAmount, { value: 0 });
+      await time.increase(Number(WINDOW / 2n));
+      const { available } = await tokenSrc.getRateLimit(
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
+      expect(available).to.equal(LIMIT);
+    });
   });
 
   // ── resetInFlight ────────────────────────────────────────────────────────
@@ -411,6 +443,18 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
           .connect(outsider)
           .resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true)
       ).to.be.revertedWithCustomError(tokenSrc, 'OwnableUnauthorizedAccount');
+    });
+
+    it('emits InFlightReset with the rate limit key', async function () {
+      const expectedKey = ethers.keccak256(
+        ethers.solidityPacked(
+          ['uint8', 'uint32', 'bool'],
+          [TRANSPORT_HYPERLANE, HL_DOMAIN, true]
+        )
+      );
+      await expect(tokenSrc.resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true))
+        .to.emit(tokenSrc, 'InFlightReset')
+        .withArgs(expectedKey);
     });
 
     it('clears in-flight and restores availability', async function () {

@@ -113,6 +113,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
     function setRateLimits(RateLimitConfig[] calldata configs) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         for (uint256 i = 0; i < configs.length; i++) {
             RateLimitConfig calldata cfg = configs[i];
+            if (cfg.transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
             bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
             _setRateLimit(key, cfg.limit, cfg.window);
             emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);

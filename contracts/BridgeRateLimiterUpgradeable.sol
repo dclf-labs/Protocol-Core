@@ -9,6 +9,9 @@ pragma solidity 0.8.28;
  * Storage is namespaced (ERC-7201) so it is safe to add to an existing
  * upgradeable proxy without shifting any inherited storage slots.
  *
+ * Decay formula matches LayerZero's RateLimiter: capacity refills at a fixed
+ * rate of limit/window per second, independent of how much was used.
+ *
  * Default behaviour: limit == 0 means unlimited. Configure limits explicitly
  * via setRateLimits() after the upgrade.
  */
@@ -40,8 +43,11 @@ abstract contract BridgeRateLimiterUpgradeable {
         0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00;
 
     event RateLimitSet(uint8 transport, uint32 remoteId, bool outbound, uint256 limit, uint256 window);
+    // key = keccak256(abi.encodePacked(transport, remoteId, outbound)) — use _rlKey() to reconstruct
+    event InFlightReset(bytes32 indexed key);
 
     error RateLimitExceeded(uint256 requested, uint256 available);
+    error InvalidTransport();
 
     function _getRateLimiterStorage() private pure returns (RateLimiterStorage storage $) {
         assembly {
@@ -53,24 +59,27 @@ abstract contract BridgeRateLimiterUpgradeable {
         return keccak256(abi.encodePacked(transport, remoteId, outbound));
     }
 
+    // Returns the current in-flight amount after linear decay (LZ formula).
+    // Decay rate = limit / window (fixed, independent of in-flight amount).
+    function _currentInFlight(RateLimit storage rl) private view returns (uint256) {
+        uint256 elapsed = block.timestamp - rl.lastUpdated;
+        if (rl.window == 0 || elapsed >= rl.window) return 0;
+        uint256 decay = (rl.limit * elapsed) / rl.window;
+        return rl.amountInFlight <= decay ? 0 : rl.amountInFlight - decay;
+    }
+
     function _checkAndUpdateRateLimit(bytes32 key, uint256 amount) internal {
         RateLimit storage rl = _getRateLimiterStorage().limits[key];
 
         // limit == 0 → unlimited
         if (rl.limit == 0) return;
 
-        uint256 elapsed = block.timestamp - rl.lastUpdated;
-        uint256 decayed = rl.window == 0
-            ? rl.amountInFlight
-            : (rl.amountInFlight * elapsed) / rl.window;
-        if (decayed > rl.amountInFlight) decayed = rl.amountInFlight;
-
-        uint256 currentInFlight = rl.amountInFlight - decayed;
-        uint256 available = rl.limit > currentInFlight ? rl.limit - currentInFlight : 0;
+        uint256 current = _currentInFlight(rl);
+        uint256 available = rl.limit > current ? rl.limit - current : 0;
 
         if (amount > available) revert RateLimitExceeded(amount, available);
 
-        rl.amountInFlight = currentInFlight + amount;
+        rl.amountInFlight = current + amount;
         rl.lastUpdated = block.timestamp;
     }
 
@@ -84,6 +93,7 @@ abstract contract BridgeRateLimiterUpgradeable {
         RateLimit storage rl = _getRateLimiterStorage().limits[key];
         rl.amountInFlight = 0;
         rl.lastUpdated = block.timestamp;
+        emit InFlightReset(key);
     }
 
     // ── Admin ────────────────────────────────────────────────────────────────
@@ -110,13 +120,7 @@ abstract contract BridgeRateLimiterUpgradeable {
             return (limit, window, available);
         }
 
-        uint256 elapsed = block.timestamp - rl.lastUpdated;
-        uint256 decayed = rl.window == 0
-            ? rl.amountInFlight
-            : (rl.amountInFlight * elapsed) / rl.window;
-        if (decayed > rl.amountInFlight) decayed = rl.amountInFlight;
-
-        uint256 currentInFlight = rl.amountInFlight - decayed;
-        available = limit > currentInFlight ? limit - currentInFlight : 0;
+        uint256 current = _currentInFlight(rl);
+        available = limit > current ? limit - current : 0;
     }
 }
