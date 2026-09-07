@@ -450,8 +450,20 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
   describe('cross-key isolation', function () {
     it('exhausting (HYPERLANE, domain=99, outbound) does not affect (LZ, eid=2, outbound)', async function () {
       await tokenSrc.setRateLimits([
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: LIMIT, window: WINDOW },
-        { transport: TRANSPORT_LZ, remoteId: CHAIN_ID_DST, outbound: true, limit: LIMIT, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+        {
+          transport: TRANSPORT_LZ,
+          remoteId: CHAIN_ID_DST,
+          outbound: true,
+          limit: LIMIT,
+          window: WINDOW,
+        },
       ]);
 
       // Exhaust the Hyperlane outbound bucket
@@ -482,11 +494,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
         lzTokenFee: feeResult.lzTokenFee,
       };
       await expect(
-        tokenSrc
-          .connect(user)
-          .send(sendParam, fee, await user.getAddress(), {
-            value: fee.nativeFee,
-          })
+        tokenSrc.connect(user).send(sendParam, fee, await user.getAddress(), {
+          value: fee.nativeFee,
+        })
       ).to.not.be.reverted;
     });
   });
@@ -496,7 +506,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
   describe('limit update mid-window', function () {
     it('lowering limit below amountInFlight clamps available to 0 without reverting', async function () {
       await tokenSrc.setRateLimits([
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: LIMIT, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: LIMIT,
+          window: WINDOW,
+        },
       ]);
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       const half = LIMIT / 2n;
@@ -507,7 +523,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
       // Drop limit below current amountInFlight (~half)
       const newLimit = half / 2n;
       await tokenSrc.setRateLimits([
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: newLimit, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: newLimit,
+          window: WINDOW,
+        },
       ]);
 
       // available must clamp to 0, no underflow
@@ -535,7 +557,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
       // window == 0: amountInFlight decays to zero on every check, so the limit
       // acts as a per-tx ceiling rather than a sliding-window accumulator.
       await tokenSrc.setRateLimits([
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: 0 },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: 0,
+        },
       ]);
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
 

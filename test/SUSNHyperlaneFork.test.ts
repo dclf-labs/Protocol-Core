@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 import { ethers, network } from 'hardhat';
-import type { StakedUSNOFTHyperlane } from '../typechain-types';
+import type { StakingVaultOFTUpgradeableHyperlane } from '../typechain-types';
 import { TRANSPORT_LZ, TRANSPORT_HYPERLANE } from './helpers/bridgeRateLimiter';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -18,15 +18,6 @@ const PROXY_ADMIN_ABI = [
   'function upgradeAndCall(address proxy, address implementation, bytes calldata data) external payable',
 ];
 
-// Old implementation — used to snapshot fields that exist pre-upgrade
-const OLD_IMPL_ABI = [
-  'function owner() view returns (address)',
-  'function totalSupply() view returns (uint256)',
-  'function peers(uint32 eid) view returns (bytes32)',
-  'function DEFAULT_ADMIN_ROLE() view returns (bytes32)',
-  'function hasRole(bytes32 role, address account) view returns (bool)',
-];
-
 async function fund(addr: string) {
   await network.provider.send('hardhat_setBalance', [
     addr,
@@ -36,22 +27,22 @@ async function fund(addr: string) {
 
 // ── Test suite ────────────────────────────────────────────────────────────────
 
-describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
+describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', function () {
   // Skip entire suite when no RPC URL is available
   before(function () {
     if (!process.env.ETHEREUM_MAINNET_RPC_URL) this.skip();
   });
 
-  let proxy: StakedUSNOFTHyperlane;
+  let proxy: StakingVaultOFTUpgradeableHyperlane;
 
-  // Pre-upgrade state snapshot — all read before the implementation is swapped.
-  // Only includes fields whose storage slots are stable across the old
-  // (StakingVaultOFTUpgradeableHyperlane) and new (StakedUSNOFTHyperlane)
-  // implementations: Ownable, AccessControl, and OFT peer storage.
+  // Pre-upgrade state snapshot — all read before the implementation is swapped
   let snap: {
     totalSupply: bigint;
+    totalAssets: bigint;
     owner: string;
     sophonPeer: string;
+    hyperlaneEnabled: boolean;
+    mailbox: string;
     ownerIsDefaultAdmin: boolean;
   };
 
@@ -66,20 +57,25 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
       ],
     });
 
-    // Read pre-upgrade state through a minimal ABI — the old impl is a staking
-    // vault (StakingVaultOFTUpgradeableHyperlane) and lacks some selectors that
-    // the new impl exposes (e.g. `blacklist`, `hyperlaneEnabled` at a new slot).
-    const oldProxy = new ethers.Contract(SUSN_PROXY, OLD_IMPL_ABI, ethers.provider);
-    const ownerAddr: string = await oldProxy.owner();
-    const defaultAdminRole: string = await oldProxy.DEFAULT_ADMIN_ROLE();
+    proxy = (await ethers.getContractAt(
+      'StakingVaultOFTUpgradeableHyperlane',
+      SUSN_PROXY
+    )) as unknown as StakingVaultOFTUpgradeableHyperlane;
+
+    // 2. Snapshot every piece of state we care about preserving
+    const ownerAddr = await proxy.owner();
+    const defaultAdminRole = await proxy.DEFAULT_ADMIN_ROLE();
     snap = {
-      totalSupply: await oldProxy.totalSupply(),
+      totalSupply: await proxy.totalSupply(),
+      totalAssets: await proxy.totalAssets(),
       owner: ownerAddr,
-      sophonPeer: await oldProxy.peers(SOPHON_EID),
-      ownerIsDefaultAdmin: await oldProxy.hasRole(defaultAdminRole, ownerAddr),
+      sophonPeer: await proxy.peers(SOPHON_EID),
+      hyperlaneEnabled: await proxy.hyperlaneEnabled(),
+      mailbox: await proxy.mailbox(),
+      ownerIsDefaultAdmin: await proxy.hasRole(defaultAdminRole, ownerAddr),
     };
 
-    // 2. Locate ProxyAdmin and its controller via EIP-1967 admin slot
+    // 3. Locate ProxyAdmin and its controller via EIP-1967 admin slot
     const raw = await ethers.provider.getStorage(SUSN_PROXY, EIP1967_ADMIN_SLOT);
     const proxyAdminAddr = ethers.getAddress('0x' + raw.slice(-40));
     const proxyAdmin = new ethers.Contract(
@@ -90,26 +86,22 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
     const proxyAdminOwner: string = await proxyAdmin.owner();
 
     await fund(proxyAdminOwner);
-    const adminOwnerSigner = await ethers.getImpersonatedSigner(proxyAdminOwner);
+    const adminOwnerSigner =
+      await ethers.getImpersonatedSigner(proxyAdminOwner);
 
-    // 3. Deploy new implementation against the real mainnet LZ endpoint
+    // 4. Deploy new implementation against the real mainnet LZ endpoint
     const [deployer] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory(
-      'StakedUSNOFTHyperlane',
+      'StakingVaultOFTUpgradeableHyperlane',
       deployer
     );
     const newImpl = await Factory.deploy(LZ_ENDPOINT);
     await newImpl.waitForDeployment();
 
-    // 4. Upgrade — proxy storage in stable slots must survive untouched
+    // 5. Upgrade — proxy storage must survive untouched
     await proxyAdmin
       .connect(adminOwnerSigner)
       .upgradeAndCall(SUSN_PROXY, await newImpl.getAddress(), '0x');
-
-    proxy = (await ethers.getContractAt(
-      'StakedUSNOFTHyperlane',
-      SUSN_PROXY
-    )) as unknown as StakedUSNOFTHyperlane;
   });
 
   // ── Storage preservation ──────────────────────────────────────────────────
@@ -118,12 +110,24 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
     expect(await proxy.totalSupply()).to.equal(snap.totalSupply);
   });
 
+  it('totalAssets is unchanged after upgrade', async function () {
+    expect(await proxy.totalAssets()).to.equal(snap.totalAssets);
+  });
+
   it('owner is unchanged after upgrade', async function () {
     expect(await proxy.owner()).to.equal(snap.owner);
   });
 
   it('Sophon LZ peer is unchanged after upgrade', async function () {
     expect(await proxy.peers(SOPHON_EID)).to.equal(snap.sophonPeer);
+  });
+
+  it('hyperlaneEnabled is unchanged after upgrade', async function () {
+    expect(await proxy.hyperlaneEnabled()).to.equal(snap.hyperlaneEnabled);
+  });
+
+  it('mailbox address is unchanged after upgrade', async function () {
+    expect(await proxy.mailbox()).to.equal(snap.mailbox);
   });
 
   it('owner DEFAULT_ADMIN_ROLE is unchanged after upgrade', async function () {
@@ -148,12 +152,18 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
     const WINDOW = 86400n;
     const OVER_LIMIT = RATE_LIMIT + ethers.parseUnits('1', 18);
     const HL_DOMAIN = 100;
-    const SEED_DOMAIN = 101; // separate domain used to seed LZ test balance, no rate limit
+    // SEED_DOMAIN: a separate Hyperlane domain used only to unlock tokens from
+    // the vault's own escrowed balance into testUser — no rate limit is set on
+    // this domain, so the handle() call is unrestricted.
+    const SEED_DOMAIN = 101;
 
     let mockMailboxAddr: string;
 
     before(async function () {
       this.timeout(60_000);
+
+      // If the vault is paused, _update reverts and the seed handle() will fail
+      if (await proxy.paused()) this.skip();
 
       await fund(snap.owner);
       const ownerSigner = await ethers.getImpersonatedSigner(snap.owner);
@@ -212,7 +222,9 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
     });
 
     it('LZ outbound: send over rate limit reverts with RateLimitExceeded', async function () {
-      // Seed testUser balance via Hyperlane handle() on SEED_DOMAIN (no rate limit)
+      // Seed testUser with OVER_LIMIT vault shares by impersonating the MockMailbox
+      // and calling handle() on SEED_DOMAIN (no rate limit). The vault unlocks
+      // tokens from its own escrowed balance (bridged-out shares held at address(this)).
       await fund(mockMailboxAddr);
       const mailboxSigner = await ethers.getImpersonatedSigner(mockMailboxAddr);
       const [, , testUser] = await ethers.getSigners();
@@ -252,7 +264,7 @@ describe('StakedUSNOFTHyperlane — mainnet fork upgrade safety', function () {
       const remoteToken = await proxy.remoteTokens(HL_DOMAIN);
       const [, , , recipient] = await ethers.getSigners();
 
-      // Rate limit check fires before _mint, so no tokens are created on revert
+      // Rate limit check fires before _update, so no tokens move on revert
       const message = ethers.concat([
         ethers.zeroPadValue(await recipient.getAddress(), 32),
         ethers.zeroPadValue(ethers.toBeHex(OVER_LIMIT), 32),
