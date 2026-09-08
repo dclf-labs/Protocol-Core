@@ -29,7 +29,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       ['Staked USN', 'sUSN', await owner.getAddress()],
       { initializer: 'initialize' }
     );
-    return Factory.attach(await proxy.getAddress()) as unknown as StakedUSNHyperlane;
+    return Factory.attach(
+      await proxy.getAddress()
+    ) as unknown as StakedUSNHyperlane;
   }
 
   // Seed balance via Hyperlane handle — the only mint path on this contract
@@ -68,7 +70,11 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
     await token.registerHyperlaneRemoteToken(HL_DOMAIN, remoteToken);
     await token.registerHyperlaneRemoteToken(HL_DOMAIN_B, remoteToken);
 
-    await seedBalance(token, await user.getAddress(), ethers.parseUnits('100', 18));
+    await seedBalance(
+      token,
+      await user.getAddress(),
+      ethers.parseUnits('100', 18)
+    );
   });
 
   // ── Admin surface ────────────────────────────────────────────────────────
@@ -130,7 +136,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
 
     it('passes when limit is 0 (unlimited)', async function () {
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
       ).to.not.be.reverted;
     });
 
@@ -145,7 +153,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         },
       ]);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
       ).to.not.be.reverted;
     });
 
@@ -163,7 +173,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       await expect(
         token
           .connect(user)
-          .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT + ONE, { value: 0 })
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT + ONE, {
+            value: 0,
+          })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
     });
   });
@@ -182,9 +194,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         ethers.zeroPadValue(ethers.toBeHex(TEN), 32),
       ]);
       await expect(
-        token.connect(mailboxImpersonated).handle(HL_DOMAIN, remoteToken, message)
+        token
+          .connect(mailboxImpersonated)
+          .handle(HL_DOMAIN, remoteToken, message)
       ).to.not.be.reverted;
-      expect(await token.balanceOf(await user.getAddress())).to.equal(balBefore + TEN);
+      expect(await token.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
     });
 
     it('passes when amount is under limit', async function () {
@@ -207,9 +223,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         ethers.zeroPadValue(ethers.toBeHex(TEN), 32),
       ]);
       await expect(
-        token.connect(mailboxImpersonated).handle(HL_DOMAIN, remoteToken, message)
+        token
+          .connect(mailboxImpersonated)
+          .handle(HL_DOMAIN, remoteToken, message)
       ).to.not.be.reverted;
-      expect(await token.balanceOf(await user.getAddress())).to.equal(balBefore + TEN);
+      expect(await token.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
     });
 
     it('reverts with RateLimitExceeded when over limit', async function () {
@@ -232,9 +252,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         ethers.zeroPadValue(ethers.toBeHex(LIMIT + ONE), 32),
       ]);
       await expect(
-        token.connect(mailboxImpersonated).handle(HL_DOMAIN, remoteToken, message)
+        token
+          .connect(mailboxImpersonated)
+          .handle(HL_DOMAIN, remoteToken, message)
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
-      expect(await token.balanceOf(await user.getAddress())).to.equal(balBefore);
+      expect(await token.balanceOf(await user.getAddress())).to.equal(
+        balBefore
+      );
     });
   });
 
@@ -257,18 +281,28 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
     });
 
     it('fully decays after window elapses', async function () {
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
       await time.increase(Number(WINDOW));
       await seedBalance(token, await user.getAddress(), LIMIT);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 })
       ).to.not.be.reverted;
     });
 
     it('available never goes below zero when decay exceeds in-flight', async function () {
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 });
       await time.increase(Number(WINDOW * 10n));
-      const { available } = await token.getRateLimit(TRANSPORT_HYPERLANE, HL_DOMAIN, true);
+      const { available } = await token.getRateLimit(
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
       expect(available).to.equal(LIMIT);
     });
 
@@ -281,7 +315,11 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         .connect(user)
         .sendTokensViaHyperlane(HL_DOMAIN, recipient, sendAmount, { value: 0 });
       await time.increase(Number(WINDOW / 2n));
-      const { available } = await token.getRateLimit(TRANSPORT_HYPERLANE, HL_DOMAIN, true);
+      const { available } = await token.getRateLimit(
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
       expect(available).to.equal(LIMIT);
     });
   });
@@ -291,13 +329,18 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
   describe('resetInFlight', function () {
     it('reverts for non-owner', async function () {
       await expect(
-        token.connect(outsider).resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+        token
+          .connect(outsider)
+          .resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true)
       ).to.be.revertedWithCustomError(token, 'OwnableUnauthorizedAccount');
     });
 
     it('emits InFlightReset with the rate limit key', async function () {
       const expectedKey = ethers.keccak256(
-        ethers.solidityPacked(['uint8', 'uint32', 'bool'], [TRANSPORT_HYPERLANE, HL_DOMAIN, true])
+        ethers.solidityPacked(
+          ['uint8', 'uint32', 'bool'],
+          [TRANSPORT_HYPERLANE, HL_DOMAIN, true]
+        )
       );
       await expect(token.resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true))
         .to.emit(token, 'InFlightReset')
@@ -315,17 +358,23 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         },
       ]);
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
 
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
 
       await token.resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true);
 
       await seedBalance(token, await user.getAddress(), LIMIT);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 })
       ).to.not.be.reverted;
     });
   });
@@ -352,15 +401,21 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       ]);
 
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
 
       // The bucket for HL_DOMAIN_B must be unaffected
       await seedBalance(token, await user.getAddress(), TEN);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN_B, recipient, TEN, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN_B, recipient, TEN, { value: 0 })
       ).to.not.be.reverted;
     });
 
@@ -383,9 +438,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       ]);
 
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT, { value: 0 });
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
 
       // Inbound bucket for the same domain must be unaffected
@@ -399,9 +458,13 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
         ethers.zeroPadValue(ethers.toBeHex(LIMIT), 32),
       ]);
       await expect(
-        token.connect(mailboxImpersonated).handle(HL_DOMAIN, remoteToken, message)
+        token
+          .connect(mailboxImpersonated)
+          .handle(HL_DOMAIN, remoteToken, message)
       ).to.not.be.reverted;
-      expect(await token.balanceOf(await user.getAddress())).to.equal(balBefore + LIMIT);
+      expect(await token.balanceOf(await user.getAddress())).to.equal(
+        balBefore + LIMIT
+      );
     });
   });
 
@@ -420,7 +483,9 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       ]);
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       const half = LIMIT / 2n;
-      await token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, half, { value: 0 });
+      await token
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, half, { value: 0 });
 
       // Drop limit below current amountInFlight (~half)
       const newLimit = half / 2n;
@@ -435,13 +500,19 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
       ]);
 
       // available must clamp to 0, no underflow
-      const { available } = await token.getRateLimit(TRANSPORT_HYPERLANE, HL_DOMAIN, true);
+      const { available } = await token.getRateLimit(
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
       expect(available).to.equal(0n);
 
       // Any further send on this key must revert
       await seedBalance(token, await user.getAddress(), ONE);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
     });
   });
@@ -465,19 +536,25 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNHyperlane', function () {
 
       // First tx at exactly the limit — passes
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
       ).to.not.be.reverted;
 
       // Immediately after: in-flight has decayed to zero, full limit is restored
       await seedBalance(token, await user.getAddress(), TEN);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
       ).to.not.be.reverted;
 
       // A single tx over the per-tx cap still reverts
       await seedBalance(token, await user.getAddress(), TEN + ONE);
       await expect(
-        token.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN + ONE, { value: 0 })
+        token
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN + ONE, { value: 0 })
       ).to.be.revertedWithCustomError(token, 'RateLimitExceeded');
     });
   });

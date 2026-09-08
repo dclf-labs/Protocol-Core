@@ -22,12 +22,14 @@ USN can be accessed permissionlessly via DEXes (Uniswap, Curve, Syncswap, Ekubo)
 ERC20 stablecoin implementing LayerZero's OFT (Omnichain Fungible Token) standard with ERC20Permit and ERC20Burnable.
 
 **Features:**
+
 - Minting and burning with admin control
 - Blacklisting and whitelisting
 - Permissionless mode toggle — once enabled, removes whitelist requirement for transfers
 - Cross-chain transfers via LayerZero
 
 **Key Functions:**
+
 - `mint(address to, uint256 amount)` — Mint USN (admin only)
 - `blacklistAccount(address)` / `unblacklistAccount(address)` — Manage blacklist (owner only)
 - `addToWhitelist(address)` / `removeFromWhitelist(address)` — Manage whitelist (owner only)
@@ -38,10 +40,12 @@ ERC20 stablecoin implementing LayerZero's OFT (Omnichain Fungible Token) standar
 Manages USN minting through two mechanisms: EIP712 signature-based orders and direct minting with Chainlink oracle pricing.
 
 **Roles:**
+
 - `MINTER_ROLE` — Execute mint orders and rebases
 - `DEFAULT_ADMIN_ROLE` — Configuration and parameter management
 
 **Order Structure:**
+
 ```solidity
 struct Order {
     string message;
@@ -55,6 +59,7 @@ struct Order {
 ```
 
 **Key Functions:**
+
 - `mint(Order calldata order, bytes calldata signature)` — Mint USN from a signed order (MINTER_ROLE)
 - `directMint(address collateralAddress, uint256 collateralAmount, uint256 minUsnAmount)` — Mint using oracle price
 - `previewDirectMint(address collateralAddress, uint256 collateralAmount)` — Preview direct mint output
@@ -69,11 +74,13 @@ struct Order {
 - `setOracleStalenessThreshold(uint256)` — Max oracle age (default: 1 hour)
 
 **Direct Mint Pricing Logic:**
+
 - Within ±1% of $1.00: 1:1 mint ratio
 - Below lower bound: mint at actual oracle price
 - Above upper bound: capped at 1:1
 
 **Security:**
+
 - ReentrancyGuard on all mint paths
 - EIP712 off-chain signing with nonce-based replay prevention
 - Per-block and per-day rate limiting
@@ -85,11 +92,13 @@ struct Order {
 Manages USN redemption — users exchange USN for underlying collateral via signed orders.
 
 **Roles:**
+
 - `BURNER_ROLE` — Execute redemptions
 - `REDEEM_MANAGER_ROLE` — Manage redeemable collateral list
 - `DEFAULT_ADMIN_ROLE` — Configuration and rescue
 
 **Order Structure:**
+
 ```solidity
 struct RedeemOrder {
     string message;
@@ -103,6 +112,7 @@ struct RedeemOrder {
 ```
 
 **Key Functions:**
+
 - `redeem(RedeemOrder calldata order, bytes calldata signature)` — Redeem USN for collateral (BURNER_ROLE)
 - `redeemWithPermit(...)` — Redeem using EIP-2612 permit for gasless approvals
 - `addRedeemableCollateral(address)` / `removeRedeemableCollateral(address)` — Manage collateral list
@@ -110,6 +120,7 @@ struct RedeemOrder {
 - `rescueERC20(address token, uint256 amount)` — Recover accidentally sent tokens (admin)
 
 **Security:**
+
 - EIP712 signing with nonce-based replay prevention
 - Per-block rate limiting
 - SafeERC20 for secure transfers
@@ -120,11 +131,13 @@ struct RedeemOrder {
 ERC4626-compliant tokenized vault where users stake USN and receive sUSN shares. Yield is distributed through rebases that increase share value.
 
 **Roles:**
+
 - `REBASE_MANAGER_ROLE` — Add assets via rebase
 - `BLACKLIST_MANAGER_ROLE` — Manage blacklist
 - `DEFAULT_ADMIN_ROLE` — Configuration
 
 **Key Functions:**
+
 - `rebase(uint256 amount)` — Add assets to vault, increasing share value (REBASE_MANAGER_ROLE)
 - `rebaseWithPermit(...)` — Rebase using ERC20Permit
 - `createWithdrawalDemand(uint256 shares, bool force)` — Initiate withdrawal with timelock
@@ -136,6 +149,7 @@ ERC4626-compliant tokenized vault where users stake USN and receive sUSN shares.
 - `rescueToken(IERC20 token, address to, uint256 amount)` — Recover accidentally sent tokens
 
 **Security:**
+
 - ReentrancyGuard on rebase
 - Two-step withdrawal with configurable timelock
 - Blacklisting for compliance
@@ -146,10 +160,12 @@ ERC4626-compliant tokenized vault where users stake USN and receive sUSN shares.
 Standalone withdrawal queuing contract used by the staking vault for managing withdrawal requests with timelocks.
 
 **Roles:**
+
 - `STAKING_VAULT_ROLE` — Create withdrawal requests
 - `DEFAULT_ADMIN_ROLE` — Configuration
 
 **Key Functions:**
+
 - `createWithdrawalRequest(address user, uint256 amount)` — Queue a withdrawal (STAKING_VAULT_ROLE)
 - `claimWithdrawal(uint256 requestId)` — Claim after timelock expires
 - `setWithdrawPeriod(uint256)` — Configure timelock duration
@@ -174,12 +190,30 @@ Same architecture as USNOFTHyperlane but for the sUSN staked token.
 
 Upgradeable ERC4626 vault combined with LayerZero OFT for cross-chain sUSN transfers.
 
+#### BridgeRateLimiterUpgradeable.sol
+
+Sliding-window rate limiter mixed into the cross-chain contracts above (USN, sUSN,
+and the staking vault), gating both LayerZero and Hyperlane send/receive paths.
+
+- **Limits are inert until configured.** `limit == 0` means unlimited, and that's
+  the state every bucket starts in — including immediately after upgrading a
+  proxy to a rate-limiter-aware implementation. Call `setRateLimits(...)` for
+  every `(transport, remoteId, outbound)` triple that needs a cap as part of the
+  same upgrade runbook; forgetting this step leaves the bridge unprotected.
+- **Blocked Hyperlane inbound messages need a manual retry.** Hyperlane's
+  `Mailbox.process()` only marks a message delivered if `handle()` succeeds, so a
+  message that reverts with `RateLimitExceeded` is not consumed — it can be
+  resubmitted to the mailbox once capacity frees up (the sliding window decays
+  over time) or after an admin raises the limit or calls `resetInFlight(...)`
+  for that key. No message is lost, but nothing retries it automatically —
+  someone has to notice the revert and resubmit.
+
 ## Deployed Contracts
 
 ### Ethereum Mainnet
 
-| Contract | Proxy | Implementation |
-| --- | --- | --- |
+| Contract     | Proxy                                        | Implementation                               |
+| ------------ | -------------------------------------------- | -------------------------------------------- |
 | StakingVault | `0xE24a3DC889621612422A64E6388927901608B91D` | `0xD1fFb6a6a42C86B931B2a6d388D1F25C1C775B34` |
 
 ## Development
@@ -238,12 +272,12 @@ Ethereum, zkSync Era, Sophon, Starknet, HyperEVM and various testnets (Sepolia, 
 
 ## Test Coverage
 
-| File | % Stmts | % Funcs | % Lines |
-| --- | --- | --- | --- |
-| contracts/MinterHandler.sol | 96.43% | 100.00% | 97.87% |
-| contracts/RedeemHandler.sol | 97.62% | 90.00% | 96.43% |
-| contracts/StakingVault.sol | 100.00% | 100.00% | 100.00% |
-| contracts/USN.sol | 100.00% | 100.00% | 100.00% |
+| File                        | % Stmts | % Funcs | % Lines |
+| --------------------------- | ------- | ------- | ------- |
+| contracts/MinterHandler.sol | 96.43%  | 100.00% | 97.87%  |
+| contracts/RedeemHandler.sol | 97.62%  | 90.00%  | 96.43%  |
+| contracts/StakingVault.sol  | 100.00% | 100.00% | 100.00% |
+| contracts/USN.sol           | 100.00% | 100.00% | 100.00% |
 
 ## Security
 

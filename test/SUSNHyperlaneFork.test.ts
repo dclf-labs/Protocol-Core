@@ -8,6 +8,7 @@ import { TRANSPORT_LZ, TRANSPORT_HYPERLANE } from './helpers/bridgeRateLimiter';
 const SUSN_PROXY = '0xE24a3DC889621612422A64E6388927901608B91D';
 const LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fE728c';
 const SOPHON_EID = 30225;
+const ZKSYNC_EID = 30165;
 
 // EIP-1967 admin slot — holds the ProxyAdmin address for Transparent proxies
 const EIP1967_ADMIN_SLOT =
@@ -25,13 +26,28 @@ const EIP1967_ADMIN_SLOT =
 //   Ownable root+0     = _owner address
 //   ReentrancyGuard root+0 = _status uint256 (1 = NOT_ENTERED)
 //
-// There is no OAppCore/LZ-endpoint entry here: that namespace's root+0 is the
-// peers mapping base, which is always zero (a mapping stores nothing at its
-// base slot), and endpoint is an immutable baked into bytecode, not proxy
-// storage — neither is a meaningful raw-slot check.
+// OAppCore root+0 is the peers mapping base, which is always zero (a mapping
+// stores nothing at its base slot) — not a meaningful check on its own. Instead
+// zkSyncPeer below is the mapping *entry* slot for peers[ZKSYNC_EID]:
+// keccak256(abi.encode(uint256(ZKSYNC_EID), OAppCoreStorageLocation)). zkSync
+// (not Sophon) is the peer actually configured non-zero on mainnet today, so
+// it's the one that makes this a meaningful raw-slot check. endpoint is an
+// immutable baked into bytecode, not proxy storage, so it has no slot to check
+// at all.
 //
 // The BridgeRateLimiter slot must be zero pre-upgrade to prove it does not
 // collide with any pre-existing storage.
+
+// OAppCoreStorageLocation — ERC-7201 root of the peers mapping (OAppCoreUpgradeable.sol):
+// keccak256(abi.encode(uint256(keccak256("layerzerov2.storage.oappcore")) - 1)) & ~bytes32(uint256(0xff))
+const OAPPCORE_STORAGE_LOCATION =
+  '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900';
+const zkSyncPeerSlot = ethers.keccak256(
+  ethers.concat([
+    ethers.zeroPadValue(ethers.toBeHex(ZKSYNC_EID), 32),
+    OAPPCORE_STORAGE_LOCATION,
+  ])
+);
 
 const RAW_SLOTS = {
   erc4626Asset:
@@ -42,6 +58,7 @@ const RAW_SLOTS = {
     '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
   reentrancyStatus:
     '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
+  zkSyncPeer: zkSyncPeerSlot,
   bridgeRateLimiter:
     '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
 } as const;
@@ -131,6 +148,10 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
         SUSN_PROXY,
         RAW_SLOTS.reentrancyStatus
       ),
+      zkSyncPeer: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.zkSyncPeer
+      ),
       bridgeRateLimiter: await ethers.provider.getStorage(
         SUSN_PROXY,
         RAW_SLOTS.bridgeRateLimiter
@@ -200,6 +221,10 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
         SUSN_PROXY,
         RAW_SLOTS.reentrancyStatus
       ),
+      zkSyncPeer: await ethers.provider.getStorage(
+        SUSN_PROXY,
+        RAW_SLOTS.zkSyncPeer
+      ),
       bridgeRateLimiter: await ethers.provider.getStorage(
         SUSN_PROXY,
         RAW_SLOTS.bridgeRateLimiter
@@ -240,6 +265,11 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
     it('ReentrancyGuard status slot is byte-identical after upgrade', async function () {
       expect(rawAfter.reentrancyStatus).to.equal(rawBefore.reentrancyStatus);
       expect(rawBefore.reentrancyStatus).to.not.equal(ethers.ZeroHash);
+    });
+
+    it('zkSync peer mapping entry slot is byte-identical after upgrade', async function () {
+      expect(rawAfter.zkSyncPeer).to.equal(rawBefore.zkSyncPeer);
+      expect(rawBefore.zkSyncPeer).to.not.equal(ethers.ZeroHash);
     });
   });
 
