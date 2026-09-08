@@ -34,7 +34,10 @@ contract StakedUSNHyperlane is
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
 
-    constructor() {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __Ownable2Step_init();

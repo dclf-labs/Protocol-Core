@@ -30,7 +30,10 @@ contract StakedUSNOFTHyperlane is
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
 
-    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __OFT_init(_name, _symbol, _owner);

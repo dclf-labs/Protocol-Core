@@ -207,6 +207,14 @@ and the staking vault), gating both LayerZero and Hyperlane send/receive paths.
   over time) or after an admin raises the limit or calls `resetInFlight(...)`
   for that key. No message is lost, but nothing retries it automatically —
   someone has to notice the revert and resubmit.
+- **Blocked LayerZero inbound messages need a manual retry too, and it's a
+  different path.** When `_credit` reverts with `RateLimitExceeded`, LayerZero's
+  endpoint keeps the packet marked verified but not executed — the executor does
+  not retry on its own. Once capacity frees up (decay) or after an admin raises
+  the limit or calls `resetInFlight(...)`, re-execute it either via the retry
+  action on LayerZero Scan or by calling `EndpointV2.lzReceive(...)` directly
+  with the original packet. Don't go looking for a Hyperlane mailbox on an LZ
+  transfer — the retry mechanism is per-transport.
 
 ## Deployed Contracts
 
