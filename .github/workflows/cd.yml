@@ -5,6 +5,11 @@ on: [push, pull_request]
 env:
   SOLC_VERSION: ${{ secrets.SOLC_VERSION || '0.8.28' }}
   SOLIDITY_OPTIMIZER: ${{ secrets.SOLIDITY_OPTIMIZER }}
+  # Falls back to a free public endpoint so the mainnet fork upgrade-safety
+  # suites (USNHyperlaneFork, SUSNHyperlaneFork) actually run in CI instead of
+  # skipping — set the ETHEREUM_MAINNET_RPC_URL repo secret to use a private
+  # RPC instead.
+  ETHEREUM_MAINNET_RPC_URL: ${{ secrets.ETHEREUM_MAINNET_RPC_URL || 'https://ethereum-rpc.publicnode.com' }}
 
 jobs:
   cd:

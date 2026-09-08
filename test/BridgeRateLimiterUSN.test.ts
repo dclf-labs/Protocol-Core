@@ -267,6 +267,9 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
     beforeEach(async function () {
       recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+    });
+
+    async function setLimit() {
       await tokenSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -276,9 +279,18 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           window: WINDOW,
         },
       ]);
+    }
+
+    it('passes when limit is 0 (unlimited)', async function () {
+      await expect(
+        tokenSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+      ).to.not.be.reverted;
     });
 
     it('passes when amount is under limit', async function () {
+      await setLimit();
       await expect(
         tokenSrc
           .connect(user)
@@ -287,6 +299,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('passes when amount equals limit exactly', async function () {
+      await setLimit();
       await expect(
         tokenSrc
           .connect(user)
@@ -295,6 +308,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts with RateLimitExceeded when amount exceeds limit', async function () {
+      await setLimit();
       await tokenSrc.connect(admin).mint(await user.getAddress(), ONE);
       await expect(
         tokenSrc
@@ -306,6 +320,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts when cumulative sends exceed limit', async function () {
+      await setLimit();
       for (let i = 0; i < 5; i++) {
         await tokenSrc
           .connect(user)
@@ -324,7 +339,24 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
   // ── Hyperlane inbound (handle → rate limit → _mint) ──────────────────────
 
   describe('Hyperlane inbound rate limit', function () {
-    beforeEach(async function () {
+    it('passes when limit is 0 (unlimited)', async function () {
+      const balBefore = await tokenSrc.balanceOf(await user.getAddress());
+      await expect(
+        handleAs(
+          await mockMailbox.getAddress(),
+          tokenSrc,
+          HL_DOMAIN,
+          await other.getAddress(),
+          await user.getAddress(),
+          TEN
+        )
+      ).to.not.be.reverted;
+      expect(await tokenSrc.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
+    });
+
+    it('passes when amount is under limit', async function () {
       await tokenSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -334,9 +366,6 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           window: WINDOW,
         },
       ]);
-    });
-
-    it('passes when amount is under limit', async function () {
       const balBefore = await tokenSrc.balanceOf(await user.getAddress());
       await expect(
         handleAs(
@@ -354,6 +383,15 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts with RateLimitExceeded when amount exceeds limit', async function () {
+      await tokenSrc.setRateLimits([
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: false,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+      ]);
       const balBefore = await tokenSrc.balanceOf(await user.getAddress());
       await expect(
         handleAs(

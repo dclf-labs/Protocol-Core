@@ -34,6 +34,7 @@ abstract contract BridgeRateLimiterUpgradeable {
         uint256 window;
     }
 
+    /// @custom:storage-location erc7201:noon.storage.bridgeratelimiter
     struct RateLimiterStorage {
         mapping(bytes32 => RateLimit) limits;
     }

@@ -3,7 +3,7 @@ import type {
   USNUpgradeableHyperlane,
   StakedUSNOFTHyperlane,
   StakingVaultOFTUpgradeableHyperlane,
-} from '../typechain-types';
+} from '../../typechain-types';
 
 export const TRANSPORT_LZ = 0;
 export const TRANSPORT_HYPERLANE = 1;

@@ -171,6 +171,21 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
 
     beforeEach(async function () {
       recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+    });
+
+    it('passes when limit is 0 (unlimited)', async function () {
+      const balBefore = await vaultSrc.balanceOf(await user.getAddress());
+      await expect(
+        vaultSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+      ).to.not.be.reverted;
+      expect(await vaultSrc.balanceOf(await user.getAddress())).to.equal(
+        balBefore - TEN
+      );
+    });
+
+    it('passes when amount is under limit', async function () {
       await vaultSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -180,9 +195,6 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
           window: WINDOW,
         },
       ]);
-    });
-
-    it('passes when amount is under limit', async function () {
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
       await expect(
         vaultSrc
@@ -195,6 +207,15 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
     });
 
     it('reverts with RateLimitExceeded when over limit', async function () {
+      await vaultSrc.setRateLimits([
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+      ]);
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
       await expect(
         vaultSrc
@@ -212,7 +233,31 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
   // ── Hyperlane inbound ────────────────────────────────────────────────────
 
   describe('Hyperlane inbound rate limit', function () {
-    beforeEach(async function () {
+    it('passes when limit is 0 (unlimited)', async function () {
+      await seedLockedBalance(vaultSrc, TEN);
+
+      const balBefore = await vaultSrc.balanceOf(await user.getAddress());
+      await network.provider.send('hardhat_setBalance', [
+        await mockMailbox.getAddress(),
+        '0x1000000000000000000',
+      ]);
+      const mailboxSigner = await ethers.getImpersonatedSigner(
+        await mockMailbox.getAddress()
+      );
+      const remoteToken = await vaultSrc.remoteTokens(HL_DOMAIN);
+      const message = ethers.concat([
+        ethers.zeroPadValue(await user.getAddress(), 32),
+        ethers.zeroPadValue(ethers.toBeHex(TEN), 32),
+      ]);
+      await expect(
+        vaultSrc.connect(mailboxSigner).handle(HL_DOMAIN, remoteToken, message)
+      ).to.not.be.reverted;
+      expect(await vaultSrc.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
+    });
+
+    it('passes when amount is under limit', async function () {
       await vaultSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -222,9 +267,6 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
           window: WINDOW,
         },
       ]);
-    });
-
-    it('passes when amount is under limit', async function () {
       await seedLockedBalance(vaultSrc, TEN);
 
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
@@ -249,6 +291,15 @@ describe('BridgeRateLimiterUpgradeable — StakingVaultOFTUpgradeableHyperlane',
     });
 
     it('reverts with RateLimitExceeded when over limit', async function () {
+      await vaultSrc.setRateLimits([
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: false,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+      ]);
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
       await network.provider.send('hardhat_setBalance', [
         await mockMailbox.getAddress(),

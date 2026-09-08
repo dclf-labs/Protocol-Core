@@ -11,6 +11,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20Burnable
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
+import "../BridgeRateLimiterUpgradeable.sol";
 
 contract StakedUSNHyperlane is
     AccessControlUpgradeable,
@@ -19,7 +20,8 @@ contract StakedUSNHyperlane is
     ERC20BurnableUpgradeable,
     PausableUpgradeable,
     IStakedUSNHyperlane,
-    IMessageRecipient
+    IMessageRecipient,
+    BridgeRateLimiterUpgradeable
 {
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
 
@@ -76,6 +78,23 @@ contract StakedUSNHyperlane is
         return super._msgData();
     }
 
+    // ── Rate limiter admin ────────────────────────────────────────────────────
+
+    function setRateLimits(RateLimitConfig[] calldata configs) external override onlyOwner {
+        for (uint256 i = 0; i < configs.length; i++) {
+            RateLimitConfig calldata cfg = configs[i];
+            if (cfg.transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
+            bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
+            _setRateLimit(key, cfg.limit, cfg.window);
+            emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);
+        }
+    }
+
+    function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyOwner {
+        if (transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
+        _resetInflightForKey(_rlKey(transport, remoteId, outbound));
+    }
+
     // Setup Hyperlane integration
     function configureHyperlane(address _mailbox) external onlyOwner {
         mailbox = IMailbox(_mailbox);
@@ -101,6 +120,8 @@ contract StakedUSNHyperlane is
         if (_recipient == bytes32(0)) revert InvalidRecipient();
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
+
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _destinationDomain, true), _amount);
 
         // Burn tokens first
         _burn(msg.sender, _amount);
@@ -150,6 +171,8 @@ contract StakedUSNHyperlane is
         address recipient = address(uint160(uint256(recipientBytes32)));
 
         if (recipient == address(0)) revert InvalidRecipient();
+
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _origin, false), amount);
 
         _mint(recipient, amount);
 

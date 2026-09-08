@@ -85,6 +85,7 @@ contract StakedUSNOFTHyperlane is
     }
 
     function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyOwner {
+        if (transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
         _resetInflightForKey(_rlKey(transport, remoteId, outbound));
     }
 

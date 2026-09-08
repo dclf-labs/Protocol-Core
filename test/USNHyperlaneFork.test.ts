@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { ethers, network } from 'hardhat';
+import { ethers, network, upgrades } from 'hardhat';
 import type { USNUpgradeableHyperlane } from '../typechain-types';
 import { TRANSPORT_LZ, TRANSPORT_HYPERLANE } from './helpers/bridgeRateLimiter';
 
@@ -22,8 +22,16 @@ const EIP1967_ADMIN_SLOT =
 //
 //   ERC20   root+2     = _totalSupply   (uint256; root+0 is a mapping ≡ 0)
 //   Ownable root+0     = _owner address
-//   OAppCore root+0    = endpoint address
-//   ReentrancyGuard root+0 = _status uint256 (1 = NOT_ENTERED)
+//
+// There is no OAppCore/LZ-endpoint entry here: that namespace's root+0 is the
+// peers mapping base, which is always zero (a mapping stores nothing at its
+// base slot), and endpoint is an immutable baked into bytecode, not proxy
+// storage — neither is a meaningful raw-slot check. USNUpgradeableHyperlane
+// also does not inherit ReentrancyGuardUpgradeable (only the vault does), so
+// there is no reentrancy namespace to check here either. EIP712Upgradeable's
+// _hashedName/_hashedVersion are legacy fields OZ 5.x explicitly zeroes on
+// init (the domain separator is rebuilt from _name/_version instead), so
+// that namespace has no non-zero scalar to check either.
 //
 // The BridgeRateLimiter slot must be zero pre-upgrade to prove it does not
 // collide with any pre-existing storage.
@@ -33,10 +41,6 @@ const RAW_SLOTS = {
     '0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace02',
   ownableOwner:
     '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
-  lzEndpoint:
-    '0x72ab1bc1039b79dc4724ffca13de82c96834302d3c7e0d4252232d4b2dd8f900',
-  reentrancyStatus:
-    '0x9b779b17422d0df92223018b32b4d1fa46e071723d6817e2486d003becc55f00',
   bridgeRateLimiter:
     '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
 } as const;
@@ -108,14 +112,6 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
         USN_PROXY,
         RAW_SLOTS.ownableOwner
       ),
-      lzEndpoint: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.lzEndpoint
-      ),
-      reentrancyStatus: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.reentrancyStatus
-      ),
       bridgeRateLimiter: await ethers.provider.getStorage(
         USN_PROXY,
         RAW_SLOTS.bridgeRateLimiter
@@ -160,6 +156,20 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
     const newImpl = await Factory.deploy(LZ_ENDPOINT);
     await newImpl.waitForDeployment();
 
+    // 4b. Automated upgrade-safety check on the new implementation. Unlike
+    // the sUSN vault, this proxy's mainnet layout isn't registered in
+    // .openzeppelin/mainnet.json (it was never deployed/upgraded through the
+    // OZ Upgrades plugin), so validateUpgrade can't diff it against a
+    // tracked "before" layout without first importing the pre-rate-limiter
+    // source as a reference — validateImplementation still catches storage-
+    // layout hazards (e.g. unsafe delegatecall, missing initializer guards)
+    // in the new implementation on its own; the manual raw-slot assertions
+    // below are what actually pin the before/after comparison for this file.
+    await upgrades.validateImplementation(Factory, {
+      constructorArgs: [LZ_ENDPOINT],
+      unsafeAllow: ['constructor'],
+    });
+
     // 5. Upgrade — proxy storage must survive untouched
     await proxyAdmin
       .connect(adminOwnerSigner)
@@ -174,14 +184,6 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       ownableOwner: await ethers.provider.getStorage(
         USN_PROXY,
         RAW_SLOTS.ownableOwner
-      ),
-      lzEndpoint: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.lzEndpoint
-      ),
-      reentrancyStatus: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.reentrancyStatus
       ),
       bridgeRateLimiter: await ethers.provider.getStorage(
         USN_PROXY,
@@ -259,15 +261,6 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       expect(rawBefore.ownableOwner).to.not.equal(ethers.ZeroHash);
     });
 
-    it('LZ endpoint slot is byte-identical after upgrade', async function () {
-      expect(rawAfter.lzEndpoint).to.equal(rawBefore.lzEndpoint);
-      expect(rawBefore.lzEndpoint).to.not.equal(ethers.ZeroHash);
-    });
-
-    it('ReentrancyGuard status slot is byte-identical after upgrade', async function () {
-      expect(rawAfter.reentrancyStatus).to.equal(rawBefore.reentrancyStatus);
-      expect(rawBefore.reentrancyStatus).to.not.equal(ethers.ZeroHash);
-    });
   });
 
   // ── Rate limiter wired up on the upgraded proxy ───────────────────────────

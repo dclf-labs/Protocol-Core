@@ -170,6 +170,17 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
 
     beforeEach(async function () {
       recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+    });
+
+    it('passes when limit is 0 (unlimited)', async function () {
+      await expect(
+        tokenSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 })
+      ).to.not.be.reverted;
+    });
+
+    it('passes when amount is under limit', async function () {
       await tokenSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -179,9 +190,6 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
           window: WINDOW,
         },
       ]);
-    });
-
-    it('passes when amount is under limit', async function () {
       await expect(
         tokenSrc
           .connect(user)
@@ -190,6 +198,15 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
     });
 
     it('reverts with RateLimitExceeded when over limit', async function () {
+      await tokenSrc.setRateLimits([
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+      ]);
       await seedBalance(tokenSrc, await user.getAddress(), ONE);
       await expect(
         tokenSrc
@@ -204,7 +221,27 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
   // ── Hyperlane inbound ────────────────────────────────────────────────────
 
   describe('Hyperlane inbound rate limit', function () {
-    beforeEach(async function () {
+    it('passes when limit is 0 (unlimited)', async function () {
+      const balBefore = await tokenSrc.balanceOf(await user.getAddress());
+      const mailboxImpersonated = await ethers.getImpersonatedSigner(
+        await mockMailbox.getAddress()
+      );
+      const remoteToken = ethers.zeroPadValue(await other.getAddress(), 32);
+      const message = ethers.concat([
+        ethers.zeroPadValue(await user.getAddress(), 32),
+        ethers.zeroPadValue(ethers.toBeHex(TEN), 32),
+      ]);
+      await expect(
+        tokenSrc
+          .connect(mailboxImpersonated)
+          .handle(HL_DOMAIN, remoteToken, message)
+      ).to.not.be.reverted;
+      expect(await tokenSrc.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
+    });
+
+    it('passes when amount is under limit', async function () {
       await tokenSrc.setRateLimits([
         {
           transport: TRANSPORT_HYPERLANE,
@@ -214,9 +251,6 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
           window: WINDOW,
         },
       ]);
-    });
-
-    it('passes when amount is under limit', async function () {
       const balBefore = await tokenSrc.balanceOf(await user.getAddress());
       const mailboxImpersonated = await ethers.getImpersonatedSigner(
         await mockMailbox.getAddress()
@@ -237,6 +271,15 @@ describe('BridgeRateLimiterUpgradeable — StakedUSNOFTHyperlane', function () {
     });
 
     it('reverts with RateLimitExceeded when over limit', async function () {
+      await tokenSrc.setRateLimits([
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: false,
+          limit: LIMIT,
+          window: WINDOW,
+        },
+      ]);
       const balBefore = await tokenSrc.balanceOf(await user.getAddress());
       const mailboxImpersonated = await ethers.getImpersonatedSigner(
         await mockMailbox.getAddress()
