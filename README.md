@@ -195,26 +195,40 @@ Upgradeable ERC4626 vault combined with LayerZero OFT for cross-chain sUSN trans
 Sliding-window rate limiter mixed into the cross-chain contracts above (USN, sUSN,
 and the staking vault), gating both LayerZero and Hyperlane send/receive paths.
 
-- **Limits are inert until configured.** `limit == 0` means unlimited, and that's
-  the state every bucket starts in — including immediately after upgrading a
-  proxy to a rate-limiter-aware implementation. Call `setRateLimits(...)` for
-  every `(transport, remoteId, outbound)` triple that needs a cap as part of the
-  same upgrade runbook; forgetting this step leaves the bridge unprotected.
-- **Blocked Hyperlane inbound messages need a manual retry.** Hyperlane's
-  `Mailbox.process()` only marks a message delivered if `handle()` succeeds, so a
-  message that reverts with `RateLimitExceeded` is not consumed — it can be
-  resubmitted to the mailbox once capacity frees up (the sliding window decays
-  over time) or after an admin raises the limit or calls `resetInFlight(...)`
-  for that key. No message is lost, but nothing retries it automatically —
-  someone has to notice the revert and resubmit.
-- **Blocked LayerZero inbound messages need a manual retry too, and it's a
-  different path.** When `_credit` reverts with `RateLimitExceeded`, LayerZero's
-  endpoint keeps the packet marked verified but not executed — the executor does
-  not retry on its own. Once capacity frees up (decay) or after an admin raises
-  the limit or calls `resetInFlight(...)`, re-execute it either via the retry
-  action on LayerZero Scan or by calling `EndpointV2.lzReceive(...)` directly
-  with the original packet. Don't go looking for a Hyperlane mailbox on an LZ
-  transfer — the retry mechanism is per-transport.
+- **Limits are inert until configured — batch `setRateLimits(...)` with the
+  upgrade rather than following up separately.** `limit == 0` means unlimited,
+  and that's the state every bucket starts in immediately after upgrading a
+  proxy to a rate-limiter-aware implementation. This doesn't introduce new
+  exposure — the bridge is already unlimited today, before this upgrade even
+  ships — but a multisig batch executes `upgradeAndCall` and `setRateLimits(...)`
+  for every `(transport, remoteId, outbound)` triple atomically at zero extra
+  cost, so there's no reason to split them. The real risk of splitting them
+  isn't a timing window; it's process drift — once the upgrade lands it reads
+  as "the rate limiter shipped," and a `setRateLimits` call left as a follow-up
+  step can quietly go unexecuted for a long time with nothing on-chain looking
+  broken to prompt anyone to notice.
+- **Blocked Hyperlane inbound messages self-heal, but slowly.**
+  `Mailbox.process()` only marks a message delivered if `handle()` succeeds,
+  so a message that reverts with `RateLimitExceeded` is not consumed.
+  Hyperlane's off-chain relayer retries failed deliveries automatically with
+  growing backoff, so it will eventually redeliver once capacity frees up —
+  but that can lag well past the point where the rate-limit window itself has
+  already reset. An admin can also raise the limit or call `resetInFlight(...)`
+  for that key to unblock it sooner.
+- **Blocked LayerZero inbound messages do not self-heal — they need a manual
+  retry, and it's a different path than Hyperlane's.** When `_credit` reverts
+  with `RateLimitExceeded`, LayerZero's endpoint keeps the packet marked
+  verified but not executed — the executor does not retry on its own. Once
+  capacity frees up (decay) or after an admin raises the limit or calls
+  `resetInFlight(...)`, re-execute it either via the retry action on LayerZero
+  Scan or by calling `EndpointV2.lzReceive(...)` directly with the original
+  packet. Don't go looking for a Hyperlane mailbox on an LZ transfer — the
+  retry mechanism is per-transport.
+- **Monitor for inbound `RateLimitExceeded` reverts.** Nothing in the
+  contracts pages anyone automatically. Hyperlane's automatic-but-slow retry
+  and LZ's fully-manual retry are both ways a legitimate transfer can sit
+  stuck without anyone noticing — alerting on this revert per route is what
+  actually closes the loop.
 
 ## Deployed Contracts
 

@@ -110,16 +110,26 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
     // ── Rate limiter admin ────────────────────────────────────────────────────
 
+    // No transport validation here either (see the comment on resetInFlight below) — same
+    // byte-budget reasoning, same admin-gated + hash-keyed-storage argument for why an
+    // invalid transport is harmless: it only ever produces a dead config nothing reads.
     function setRateLimits(RateLimitConfig[] calldata configs) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         for (uint256 i = 0; i < configs.length; i++) {
             RateLimitConfig calldata cfg = configs[i];
-            if (cfg.transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
             bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
             _setRateLimit(key, cfg.limit, cfg.window);
             emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);
         }
     }
 
+    // No transport validation here (unlike the other three rate-limited contracts): this
+    // contract sits a few bytes under the EIP-170 limit, and the guard costs ~37 bytes at
+    // runs:1 — it doesn't fit. Safe to omit because this is DEFAULT_ADMIN_ROLE-gated and the
+    // key is a hash of (transport, remoteId, outbound); an invalid transport just resets a
+    // phantom bucket that no enforcement path (_debit/_credit/sendTokensViaHyperlane/handle)
+    // ever reads, since those always call with the literal TRANSPORT_LZ/TRANSPORT_HYPERLANE
+    // constant. Do not add the check back without first freeing up size — it will fail to
+    // deploy otherwise.
     function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyRole(DEFAULT_ADMIN_ROLE) {
         _resetInflightForKey(_rlKey(transport, remoteId, outbound));
     }
