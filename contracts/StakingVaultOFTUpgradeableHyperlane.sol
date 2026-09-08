@@ -6,15 +6,14 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
 import "./interfaces/IStakingVaultUpgradeableHyperlane.sol";
 import "./interfaces/IWithdrawalHandler.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
+import "./BridgeRateLimiterUpgradeable.sol";
 
 // Separate storage contract to avoid storage collisions in upgrades
 abstract contract StakingVaultStorageV1 {
@@ -53,12 +52,13 @@ contract StakingVaultOFTUpgradeableHyperlane is
     IStakingVaultUpgradeableHyperlane,
     StakingVaultStorageV1,
     PausableUpgradeable,
-    IMessageRecipient
+    IMessageRecipient,
+    BridgeRateLimiterUpgradeable
 {
     using SafeERC20 for IERC20;
 
     // Constants
-    bytes32 public constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
+    bytes32 internal constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
 
     // Hyperlane storage
@@ -67,7 +67,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
 
-    uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
+    uint256 internal constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
@@ -106,6 +106,32 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
+    }
+
+    // ── Rate limiter admin ────────────────────────────────────────────────────
+
+    // No transport validation here either (see the comment on resetInFlight below) — same
+    // byte-budget reasoning, same admin-gated + hash-keyed-storage argument for why an
+    // invalid transport is harmless: it only ever produces a dead config nothing reads.
+    function setRateLimits(RateLimitConfig[] calldata configs) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        for (uint256 i = 0; i < configs.length; i++) {
+            RateLimitConfig calldata cfg = configs[i];
+            bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
+            _setRateLimit(key, cfg.limit, cfg.window);
+            emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);
+        }
+    }
+
+    // No transport validation here (unlike the other three rate-limited contracts): this
+    // contract sits a few bytes under the EIP-170 limit, and the guard costs ~37 bytes at
+    // runs:1 — it doesn't fit. Safe to omit because this is DEFAULT_ADMIN_ROLE-gated and the
+    // key is a hash of (transport, remoteId, outbound); an invalid transport just resets a
+    // phantom bucket that no enforcement path (_debit/_credit/sendTokensViaHyperlane/handle)
+    // ever reads, since those always call with the literal TRANSPORT_LZ/TRANSPORT_HYPERLANE
+    // constant. Do not add the check back without first freeing up size — it will fail to
+    // deploy otherwise.
+    function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyRole(DEFAULT_ADMIN_ROLE) {
+        _resetInflightForKey(_rlKey(transport, remoteId, outbound));
     }
 
     function blacklistAccount(address account) external onlyRole(BLACKLIST_MANAGER_ROLE) {
@@ -172,34 +198,6 @@ contract StakingVaultOFTUpgradeableHyperlane is
         emit WithdrawalDemandCreated(msg.sender, assets, block.timestamp);
     }
 
-    function depositWithPermit(
-        uint256 assets,
-        address receiver,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external returns (uint256) {
-        try IERC20Permit(address(asset())).permit(msg.sender, address(this), assets, deadline, v, r, s) {} catch {}
-        return deposit(assets, receiver);
-    }
-
-    function mintWithSlippageCheck(uint256 shares, address receiver, uint256 maxAssets) external returns (uint256) {
-        uint256 assets = previewMint(shares);
-        if (assets > maxAssets) revert SlippageExceeded(assets, maxAssets);
-        return mint(shares, receiver);
-    }
-
-    function depositWithSlippageCheck(
-        uint256 assets,
-        address receiver,
-        uint256 minSharesOut
-    ) external returns (uint256) {
-        uint256 shares = previewDeposit(assets);
-        if (shares < minSharesOut) revert SlippageExceeded(shares, minSharesOut);
-        return deposit(assets, receiver);
-    }
-
     function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
         StakingVaultStorage storage s = getStakingVaultStorage();
         if (owner != msg.sender) revert Unauthorized();
@@ -228,28 +226,6 @@ contract StakingVaultOFTUpgradeableHyperlane is
         uint256 assets = previewRedeem(shares);
         createWithdrawalDemand(assets);
         return super.redeem(shares, receiver, owner);
-    }
-
-    function withdrawWithSlippageCheck(
-        uint256 assets,
-        address receiver,
-        address owner,
-        uint256 maxSharesBurned
-    ) external returns (uint256) {
-        uint256 shares = previewWithdraw(assets);
-        if (shares > maxSharesBurned) revert SlippageExceeded(shares, maxSharesBurned);
-        return withdraw(assets, receiver, owner);
-    }
-
-    function redeemWithSlippageCheck(
-        uint256 shares,
-        address receiver,
-        address owner,
-        uint256 minAssetsOut
-    ) external returns (uint256) {
-        uint256 assets = previewRedeem(shares);
-        if (assets < minAssetsOut) revert SlippageExceeded(assets, minAssetsOut);
-        return redeem(shares, receiver, owner);
     }
 
     function _update(
@@ -281,7 +257,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
         uint32 _dstEid
     ) internal virtual override returns (uint256 amountSentLD, uint256 amountReceivedLD) {
         (amountSentLD, amountReceivedLD) = _debitView(_amountLD, _minAmountLD, _dstEid);
-
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _dstEid, true), amountSentLD);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), amountSentLD);
         return (amountSentLD, amountReceivedLD);
@@ -290,10 +266,10 @@ contract StakingVaultOFTUpgradeableHyperlane is
     function _credit(
         address _to,
         uint256 _amountLD,
-        uint32 /*_srcEid*/
+        uint32 _srcEid
     ) internal virtual override returns (uint256 amountReceivedLD) {
         if (_to == address(0x0)) _to = address(0xdead);
-
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _srcEid, false), _amountLD);
         // Unlock tokens instead of minting
         _update(address(this), _to, _amountLD);
         return _amountLD;
@@ -325,6 +301,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
 
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _destinationDomain, true), _amount);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), _amount);
 
@@ -374,6 +351,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
         if (recipient == address(0)) revert InvalidRecipient();
 
+        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _origin, false), amount);
         // Unlock tokens instead of minting
         _update(address(this), recipient, amount);
 
