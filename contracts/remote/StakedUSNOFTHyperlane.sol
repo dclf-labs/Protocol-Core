@@ -9,18 +9,19 @@ import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "../BridgeRateLimiterUpgradeable.sol";
+import "../interfaces/IBridgeRateLimiter.sol";
 
 contract StakedUSNOFTHyperlane is
     OFTUpgradeable,
     AccessControlUpgradeable,
     IStakedUSNBasicOFT,
     IMessageRecipient,
-    PausableUpgradeable,
-    BridgeRateLimiterUpgradeable
+    PausableUpgradeable
 {
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
     uint8 public constant VERSION = 1;
+    uint8 internal constant TRANSPORT_LZ = 0;
+    uint8 internal constant TRANSPORT_HYPERLANE = 1;
 
     mapping(address => bool) public blacklist;
 
@@ -29,6 +30,11 @@ contract StakedUSNOFTHyperlane is
     IInterchainSecurityModule private _interchainSecurityModule;
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
+
+    // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
+    // address(0) means no limiter wired yet: unlimited, same as limit == 0.
+    address public rateLimiter;
+    event RateLimiterSet(address indexed rateLimiter);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
@@ -75,21 +81,23 @@ contract StakedUSNOFTHyperlane is
         return super._msgData();
     }
 
-    // ── Rate limiter admin ────────────────────────────────────────────────────
+    // ── Rate limiter wiring ──────────────────────────────────────────────────
 
-    function setRateLimits(RateLimitConfig[] calldata configs) external override onlyOwner {
-        for (uint256 i = 0; i < configs.length; i++) {
-            RateLimitConfig calldata cfg = configs[i];
-            if (cfg.transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
-            bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
-            _setRateLimit(key, cfg.limit, cfg.window);
-            emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);
-        }
+    // Rate limit config/reset live on the BridgeRateLimiter itself (its owner
+    // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
+    // there directly) — this contract only needs to know which limiter to call.
+    function setRateLimiter(address _rateLimiter) external onlyOwner {
+        rateLimiter = _rateLimiter;
+        emit RateLimiterSet(_rateLimiter);
     }
 
-    function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyOwner {
-        if (transport > TRANSPORT_HYPERLANE) revert InvalidTransport();
-        _resetInflightForKey(_rlKey(transport, remoteId, outbound));
+    // Reaches the shared BridgeRateLimiter via a plain external CALL.
+    // rateLimiter == address(0) (not wired yet) behaves like limit == 0: unlimited.
+    function _checkAndUpdateRateLimit(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) private {
+        address limiter = rateLimiter;
+        if (limiter != address(0)) {
+            IBridgeRateLimiter(limiter).checkAndUpdate(transport, remoteId, outbound, amount);
+        }
     }
 
     // ── LZ overrides ─────────────────────────────────────────────────────────
@@ -100,7 +108,7 @@ contract StakedUSNOFTHyperlane is
         uint32 _dstEid
     ) internal virtual override returns (uint256 amountSentLD, uint256 amountReceivedLD) {
         (amountSentLD, amountReceivedLD) = _debitView(_amountLD, _minAmountLD, _dstEid);
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _dstEid, true), amountSentLD);
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _dstEid, true, amountSentLD);
         _burn(msg.sender, amountSentLD);
     }
 
@@ -109,7 +117,7 @@ contract StakedUSNOFTHyperlane is
         uint256 _amountLD,
         uint32 _srcEid
     ) internal virtual override returns (uint256 amountReceivedLD) {
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _srcEid, false), _amountLD);
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _srcEid, false, _amountLD);
         return super._credit(_to, _amountLD, _srcEid);
     }
 
@@ -140,7 +148,7 @@ contract StakedUSNOFTHyperlane is
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
 
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _destinationDomain, true), _amount);
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _destinationDomain, true, _amount);
 
         // Burn tokens first
         _burn(msg.sender, _amount);
@@ -191,7 +199,7 @@ contract StakedUSNOFTHyperlane is
 
         if (recipient == address(0)) revert InvalidRecipient();
 
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _origin, false), amount);
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _origin, false, amount);
 
         _mint(recipient, amount);
 

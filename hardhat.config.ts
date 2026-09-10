@@ -36,16 +36,18 @@ const config: HardhatUserConfig = {
           },
         },
       },
-    ],
-    // StakingVaultOFTUpgradeableHyperlane is near the 24 576-byte EIP-170 limit
-    // after adding BridgeRateLimiterUpgradeable. runs:1 keeps deployed bytecode
-    // under the limit; execution gas is not a concern for admin-only paths.
-    overrides: {
-      'contracts/StakingVaultOFTUpgradeableHyperlane.sol': {
-        version: '0.8.28',
-        settings: { optimizer: { enabled: true, runs: 1 } },
+      // Matches the pragma pinned by Morpho's morpho-blue-oracles contracts
+      // (StorkAggregatorV3Wrapper.sol, and the vendored morpho-chainlink/ sources).
+      {
+        version: '0.8.21',
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 100,
+          },
+        },
       },
-    },
+    ],
   },
   finder: {
     prettify: true,

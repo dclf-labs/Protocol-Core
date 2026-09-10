@@ -3,6 +3,7 @@ import type {
   USNUpgradeableHyperlane,
   StakedUSNOFTHyperlane,
   StakingVaultOFTUpgradeableHyperlane,
+  BridgeRateLimiter,
 } from '../../typechain-types';
 
 export const TRANSPORT_LZ = 0;
@@ -17,6 +18,27 @@ export function encodeOFTMsg(recipient: string, amountLD: bigint): string {
   const recipientB32 = ethers.zeroPadValue(recipient, 32);
   const amountSD = amountLD / DECIMAL_CONVERSION_RATE;
   return ethers.concat([recipientB32, ethers.toBeHex(amountSD, 8)]);
+}
+
+// Deploys a BridgeRateLimiter owned by `owner`, registers `caller` (the
+// vault/token under test), and wires it in via setRateLimiter(). Returns the
+// limiter so tests can call setRateLimits(caller, ...) / resetInFlight(caller, ...)
+// / getRateLimit(caller, ...) directly on it.
+export async function deployAndWireRateLimiter(
+  owner: import('@nomicfoundation/hardhat-ethers/signers').HardhatEthersSigner,
+  caller: {
+    getAddress(): Promise<string>;
+    setRateLimiter(rateLimiter: string): Promise<unknown>;
+  }
+): Promise<BridgeRateLimiter> {
+  const Factory = await ethers.getContractFactory('BridgeRateLimiter');
+  const limiter = (await Factory.connect(owner).deploy(
+    await owner.getAddress()
+  )) as unknown as BridgeRateLimiter;
+  const callerAddress = await caller.getAddress();
+  await limiter.connect(owner).registerCaller(callerAddress);
+  await caller.setRateLimiter(await limiter.getAddress());
+  return limiter;
 }
 
 export async function lzReceiveAs(

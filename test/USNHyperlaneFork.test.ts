@@ -1,7 +1,11 @@
 import { expect } from 'chai';
 import { ethers, network, upgrades } from 'hardhat';
-import type { USNUpgradeableHyperlane } from '../typechain-types';
-import { TRANSPORT_LZ, TRANSPORT_HYPERLANE } from './helpers/bridgeRateLimiter';
+import type { USNUpgradeableHyperlane, BridgeRateLimiter } from '../typechain-types';
+import {
+  TRANSPORT_LZ,
+  TRANSPORT_HYPERLANE,
+  deployAndWireRateLimiter,
+} from './helpers/bridgeRateLimiter';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -38,8 +42,11 @@ const EIP1967_ADMIN_SLOT =
 // _name/_version instead), so that namespace has no non-zero scalar to check
 // either.
 //
-// The BridgeRateLimiter slot must be zero pre-upgrade to prove it does not
-// collide with any pre-existing storage.
+// rateLimiter (the pointer to the standalone BridgeRateLimiter contract) is a
+// plain linear-storage variable appended after the existing declared fields —
+// not an ERC-7201 namespace — so there's no hash-derived slot to collide-check
+// here; its "no pre-existing garbage" proof is the functional read-back below
+// (proxy.rateLimiter() == address(0) immediately post-upgrade).
 
 // OAppCoreStorageLocation — ERC-7201 root of the peers mapping (OAppCoreUpgradeable.sol):
 // keccak256(abi.encode(uint256(keccak256("layerzerov2.storage.oappcore")) - 1)) & ~bytes32(uint256(0xff))
@@ -58,8 +65,6 @@ const RAW_SLOTS = {
   ownableOwner:
     '0x9016d09d72d40fdae2fd8ceac6b6234c7706214fd39c1cd1e609a0528c199300',
   zkSyncPeer: zkSyncPeerSlot,
-  bridgeRateLimiter:
-    '0x63a6a5fc9c18d1890bac0c27ad895de6f091c8269e5f94ea1fa52545fb6d7e00',
 } as const;
 
 const PROXY_ADMIN_ABI = [
@@ -132,10 +137,6 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       zkSyncPeer: await ethers.provider.getStorage(
         USN_PROXY,
         RAW_SLOTS.zkSyncPeer
-      ),
-      bridgeRateLimiter: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.bridgeRateLimiter
       ),
     };
 
@@ -210,10 +211,6 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
         USN_PROXY,
         RAW_SLOTS.zkSyncPeer
       ),
-      bridgeRateLimiter: await ethers.provider.getStorage(
-        USN_PROXY,
-        RAW_SLOTS.bridgeRateLimiter
-      ),
     };
   });
 
@@ -267,13 +264,9 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
   // bypassing the ABI. A layout shift that coincidentally decodes to the same
   // value through the ABI would still fail here because the raw bytes differ.
   //
-  // The BridgeRateLimiter check specifically proves that its ERC-7201 slot
-  // (keccak256("noon.storage.bridgeratelimiter") − 1, masked) did not overlap
-  // any slot already occupied in the pre-upgrade proxy.
-
   describe('storage layout — raw slot validation', function () {
-    it('BridgeRateLimiter ERC-7201 slot was zero pre-upgrade (no collision with existing storage)', async function () {
-      expect(rawBefore.bridgeRateLimiter).to.equal(ethers.ZeroHash);
+    it('rateLimiter is unset immediately after upgrade (fresh linear-storage slot, no pre-existing garbage)', async function () {
+      expect(await proxy.rateLimiter()).to.equal(ethers.ZeroAddress);
     });
 
     it('ERC20 totalSupply slot is byte-identical after upgrade', async function () {
@@ -298,9 +291,9 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
   // before this describe — its `before()` mutates proxy state (enablePermissionless,
   // configureHyperlane) that the outer assertions read in their pre-upgrade form.
   //
-  // These tests confirm that BridgeRateLimiterUpgradeable is correctly wired
-  // into the upgraded proxy — i.e., that the ERC-7201 slot didn't collide with
-  // any existing storage and that the send/receive hooks are reached.
+  // These tests confirm the standalone BridgeRateLimiter is correctly wired
+  // into the upgraded proxy — i.e., that setRateLimiter() takes effect and
+  // that the send/receive hooks actually reach it.
 
   describe('rate limiter enforcement on the upgraded proxy', function () {
     const RATE_LIMIT = ethers.parseUnits('100', 18);
@@ -309,12 +302,18 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
     const HL_DOMAIN = 100; // arbitrary — just needs a registered remote token
 
     let mockMailboxAddr: string;
+    let limiter: BridgeRateLimiter;
 
     before(async function () {
       this.timeout(60_000);
 
       await fund(snap.owner);
       const ownerSigner = await ethers.getImpersonatedSigner(snap.owner);
+
+      limiter = await deployAndWireRateLimiter(
+        ownerSigner,
+        proxy.connect(ownerSigner) as unknown as USNUpgradeableHyperlane
+      );
 
       // Open permissionless mode so test mints can reach arbitrary addresses
       // without requiring whitelist management in this fork context
@@ -339,7 +338,7 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
         .registerHyperlaneRemoteToken(HL_DOMAIN, remoteToken);
 
       // Set rate limits for both directions under test
-      await proxy.connect(ownerSigner).setRateLimits([
+      await limiter.connect(ownerSigner).setRateLimits(await proxy.getAddress(), [
         {
           transport: TRANSPORT_LZ,
           remoteId: SOPHON_EID,
@@ -358,7 +357,8 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
     });
 
     it('getRateLimit reflects the configured LZ outbound limit', async function () {
-      const { limit, window } = await proxy.getRateLimit(
+      const { limit, window } = await limiter.getRateLimit(
+        await proxy.getAddress(),
         TRANSPORT_LZ,
         SOPHON_EID,
         true
@@ -392,7 +392,7 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
         proxy
           .connect(testUser)
           .send(sendParam, { nativeFee: 0n, lzTokenFee: 0n }, testUserAddr)
-      ).to.be.revertedWithCustomError(proxy, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiter, 'RateLimitExceeded');
     });
 
     it('Hyperlane inbound: handle over rate limit reverts with RateLimitExceeded', async function () {
@@ -408,7 +408,7 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
       ]);
       await expect(
         proxy.connect(mailboxSigner).handle(HL_DOMAIN, remoteToken, message)
-      ).to.be.revertedWithCustomError(proxy, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiter, 'RateLimitExceeded');
     });
   });
 });

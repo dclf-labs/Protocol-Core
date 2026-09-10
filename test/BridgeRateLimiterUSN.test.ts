@@ -6,6 +6,7 @@ import type {
   USNUpgradeableHyperlane,
   EndpointV2Mock,
   MockMailbox,
+  BridgeRateLimiter,
 } from '../typechain-types';
 import {
   TRANSPORT_LZ,
@@ -15,11 +16,14 @@ import {
   HL_DOMAIN,
   LZ_OPTIONS,
   lzReceiveAs,
+  deployAndWireRateLimiter,
 } from './helpers/bridgeRateLimiter';
 
-describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function () {
+describe('BridgeRateLimiter — USNUpgradeableHyperlane', function () {
   let tokenSrc: USNUpgradeableHyperlane;
   let tokenDst: USNUpgradeableHyperlane;
+  let limiterSrc: BridgeRateLimiter;
+  let limiterDst: BridgeRateLimiter;
   let endpointSrc: EndpointV2Mock;
   let endpointDst: EndpointV2Mock;
   let mockMailbox: MockMailbox;
@@ -68,6 +72,9 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
     tokenSrc = await deployToken(endpointSrc);
     tokenDst = await deployToken(endpointDst);
+
+    limiterSrc = await deployAndWireRateLimiter(owner, tokenSrc);
+    limiterDst = await deployAndWireRateLimiter(owner, tokenDst);
 
     // Wire LZ routing
     await endpointSrc.setDestLzEndpoint(
@@ -122,7 +129,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
   describe('setRateLimits', function () {
     it('reverts for non-owner', async function () {
       await expect(
-        tokenSrc.connect(outsider).setRateLimits([
+        limiterSrc.connect(outsider).setRateLimits(await tokenSrc.getAddress(), [
           {
             transport: TRANSPORT_HYPERLANE,
             remoteId: HL_DOMAIN,
@@ -131,12 +138,12 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
             window: WINDOW,
           },
         ])
-      ).to.be.revertedWithCustomError(tokenSrc, 'OwnableUnauthorizedAccount');
+      ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 
     it('emits RateLimitSet per entry', async function () {
       await expect(
-        tokenSrc.setRateLimits([
+        limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
           {
             transport: TRANSPORT_HYPERLANE,
             remoteId: HL_DOMAIN,
@@ -153,24 +160,38 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           },
         ])
       )
-        .to.emit(tokenSrc, 'RateLimitSet')
-        .withArgs(TRANSPORT_HYPERLANE, HL_DOMAIN, true, LIMIT, WINDOW)
-        .and.to.emit(tokenSrc, 'RateLimitSet')
-        .withArgs(TRANSPORT_LZ, CHAIN_ID_DST, false, TEN, WINDOW);
+        .to.emit(limiterSrc, 'RateLimitSet')
+        .withArgs(
+          await tokenSrc.getAddress(),
+          TRANSPORT_HYPERLANE,
+          HL_DOMAIN,
+          true,
+          LIMIT,
+          WINDOW
+        )
+        .and.to.emit(limiterSrc, 'RateLimitSet')
+        .withArgs(
+          await tokenSrc.getAddress(),
+          TRANSPORT_LZ,
+          CHAIN_ID_DST,
+          false,
+          TEN,
+          WINDOW
+        );
     });
   });
 
   describe('resetInFlight', function () {
     it('reverts for non-owner', async function () {
       await expect(
-        tokenSrc
+        limiterSrc
           .connect(outsider)
-          .resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true)
-      ).to.be.revertedWithCustomError(tokenSrc, 'OwnableUnauthorizedAccount');
+          .resetInFlight(await tokenSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+      ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 
     it('clears in-flight and restores full availability', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -188,9 +209,14 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc
           .connect(user)
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
 
-      await tokenSrc.resetInFlight(TRANSPORT_HYPERLANE, HL_DOMAIN, true);
+      await limiterSrc.resetInFlight(
+        await tokenSrc.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
 
       await tokenSrc.connect(admin).mint(await user.getAddress(), LIMIT);
       await expect(
@@ -205,7 +231,8 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
   describe('getRateLimit', function () {
     it('returns max uint256 available when limit is 0 (unlimited)', async function () {
-      const { limit, available } = await tokenSrc.getRateLimit(
+      const { limit, available } = await limiterSrc.getRateLimit(
+        await tokenSrc.getAddress(),
         TRANSPORT_HYPERLANE,
         HL_DOMAIN,
         true
@@ -215,7 +242,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('returns full limit as available when nothing consumed', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -224,7 +251,8 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           window: WINDOW,
         },
       ]);
-      const { limit, available } = await tokenSrc.getRateLimit(
+      const { limit, available } = await limiterSrc.getRateLimit(
+        await tokenSrc.getAddress(),
         TRANSPORT_HYPERLANE,
         HL_DOMAIN,
         true
@@ -234,7 +262,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reflects partial consumption', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -248,7 +276,8 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         .connect(user)
         .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
 
-      const { available } = await tokenSrc.getRateLimit(
+      const { available } = await limiterSrc.getRateLimit(
+        await tokenSrc.getAddress(),
         TRANSPORT_HYPERLANE,
         HL_DOMAIN,
         true
@@ -270,7 +299,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     async function setLimit() {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -316,7 +345,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, LIMIT + ONE, {
             value: 0,
           })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
     });
 
     it('reverts when cumulative sends exceed limit', async function () {
@@ -332,7 +361,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc
           .connect(user)
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
     });
   });
 
@@ -357,7 +386,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('passes when amount is under limit', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -383,7 +412,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts with RateLimitExceeded when amount exceeds limit', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -402,7 +431,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           await user.getAddress(),
           LIMIT + ONE
         )
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
       expect(await tokenSrc.balanceOf(await user.getAddress())).to.equal(
         balBefore
       );
@@ -439,7 +468,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts with RateLimitExceeded when amount exceeds limit', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_LZ,
           remoteId: CHAIN_ID_DST,
@@ -469,7 +498,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc.connect(user).send(sendParam, fee, await user.getAddress(), {
           value: fee.nativeFee,
         })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
       // Funds must NOT have been burned
       expect(await tokenSrc.balanceOf(await user.getAddress())).to.equal(
         balBefore
@@ -498,7 +527,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     });
 
     it('reverts with RateLimitExceeded when amount exceeds limit', async function () {
-      await tokenDst.setRateLimits([
+      await limiterDst.setRateLimits(await tokenDst.getAddress(), [
         {
           transport: TRANSPORT_LZ,
           remoteId: CHAIN_ID_SRC,
@@ -517,7 +546,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
           await user.getAddress(),
           TEN + ONE
         )
-      ).to.be.revertedWithCustomError(tokenDst, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterDst, 'RateLimitExceeded');
       expect(await tokenDst.balanceOf(await user.getAddress())).to.equal(
         balBefore
       );
@@ -531,7 +560,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
     beforeEach(async function () {
       recipient = ethers.zeroPadValue(await other.getAddress(), 32);
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -580,7 +609,8 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 });
       await time.increase(Number(WINDOW * 10n));
 
-      const { available } = await tokenSrc.getRateLimit(
+      const { available } = await limiterSrc.getRateLimit(
+        await tokenSrc.getAddress(),
         TRANSPORT_HYPERLANE,
         HL_DOMAIN,
         true
@@ -593,7 +623,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
   describe('cross-key isolation', function () {
     it('exhausting (HYPERLANE, domain=99, outbound) does not affect (LZ, eid=2, outbound)', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -619,7 +649,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc
           .connect(user)
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
 
       // The LZ outbound bucket for CHAIN_ID_DST must be unaffected
       await tokenSrc.connect(admin).mint(await user.getAddress(), TEN);
@@ -649,7 +679,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
   describe('limit update mid-window', function () {
     it('lowering limit below amountInFlight clamps available to 0 without reverting', async function () {
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -666,7 +696,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
 
       // Drop limit below current amountInFlight (~half)
       const newLimit = half / 2n;
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -677,7 +707,8 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
       ]);
 
       // available must clamp to 0, no underflow
-      const { available } = await tokenSrc.getRateLimit(
+      const { available } = await limiterSrc.getRateLimit(
+        await tokenSrc.getAddress(),
         TRANSPORT_HYPERLANE,
         HL_DOMAIN,
         true
@@ -690,7 +721,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc
           .connect(user)
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
     });
   });
 
@@ -700,7 +731,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
     it('decays instantly — limit applies per transaction, no accumulation', async function () {
       // window == 0: amountInFlight decays to zero on every check, so the limit
       // acts as a per-tx ceiling rather than a sliding-window accumulator.
-      await tokenSrc.setRateLimits([
+      await limiterSrc.setRateLimits(await tokenSrc.getAddress(), [
         {
           transport: TRANSPORT_HYPERLANE,
           remoteId: HL_DOMAIN,
@@ -732,7 +763,7 @@ describe('BridgeRateLimiterUpgradeable — USNUpgradeableHyperlane', function ()
         tokenSrc
           .connect(user)
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN + ONE, { value: 0 })
-      ).to.be.revertedWithCustomError(tokenSrc, 'RateLimitExceeded');
+      ).to.be.revertedWithCustomError(limiterSrc, 'RateLimitExceeded');
     });
   });
 });

@@ -13,7 +13,7 @@ import "./interfaces/IWithdrawalHandler.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
-import "./BridgeRateLimiterUpgradeable.sol";
+import "./interfaces/IBridgeRateLimiter.sol";
 
 // Separate storage contract to avoid storage collisions in upgrades
 abstract contract StakingVaultStorageV1 {
@@ -52,20 +52,26 @@ contract StakingVaultOFTUpgradeableHyperlane is
     IStakingVaultUpgradeableHyperlane,
     StakingVaultStorageV1,
     PausableUpgradeable,
-    IMessageRecipient,
-    BridgeRateLimiterUpgradeable
+    IMessageRecipient
 {
     using SafeERC20 for IERC20;
 
     // Constants
     bytes32 internal constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
+    uint8 internal constant TRANSPORT_LZ = 0;
+    uint8 internal constant TRANSPORT_HYPERLANE = 1;
 
     // Hyperlane storage
     IMailbox public mailbox;
     IInterchainSecurityModule private _interchainSecurityModule;
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
+
+    // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
+    // address(0) means no limiter wired yet: unlimited, same as limit == 0.
+    address public rateLimiter;
+    event RateLimiterSet(address indexed rateLimiter);
 
     uint256 internal constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
@@ -108,30 +114,14 @@ contract StakingVaultOFTUpgradeableHyperlane is
         _unpause();
     }
 
-    // ── Rate limiter admin ────────────────────────────────────────────────────
+    // ── Rate limiter wiring ──────────────────────────────────────────────────
 
-    // No transport validation here either (see the comment on resetInFlight below) — same
-    // byte-budget reasoning, same admin-gated + hash-keyed-storage argument for why an
-    // invalid transport is harmless: it only ever produces a dead config nothing reads.
-    function setRateLimits(RateLimitConfig[] calldata configs) external override onlyRole(DEFAULT_ADMIN_ROLE) {
-        for (uint256 i = 0; i < configs.length; i++) {
-            RateLimitConfig calldata cfg = configs[i];
-            bytes32 key = _rlKey(cfg.transport, cfg.remoteId, cfg.outbound);
-            _setRateLimit(key, cfg.limit, cfg.window);
-            emit RateLimitSet(cfg.transport, cfg.remoteId, cfg.outbound, cfg.limit, cfg.window);
-        }
-    }
-
-    // No transport validation here (unlike the other three rate-limited contracts): this
-    // contract sits a few bytes under the EIP-170 limit, and the guard costs ~37 bytes at
-    // runs:1 — it doesn't fit. Safe to omit because this is DEFAULT_ADMIN_ROLE-gated and the
-    // key is a hash of (transport, remoteId, outbound); an invalid transport just resets a
-    // phantom bucket that no enforcement path (_debit/_credit/sendTokensViaHyperlane/handle)
-    // ever reads, since those always call with the literal TRANSPORT_LZ/TRANSPORT_HYPERLANE
-    // constant. Do not add the check back without first freeing up size — it will fail to
-    // deploy otherwise.
-    function resetInFlight(uint8 transport, uint32 remoteId, bool outbound) external override onlyRole(DEFAULT_ADMIN_ROLE) {
-        _resetInflightForKey(_rlKey(transport, remoteId, outbound));
+    // Rate limit config/reset live on the BridgeRateLimiter itself (its owner
+    // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
+    // there directly) — this contract only needs to know which limiter to call.
+    function setRateLimiter(address _rateLimiter) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        rateLimiter = _rateLimiter;
+        emit RateLimiterSet(_rateLimiter);
     }
 
     function blacklistAccount(address account) external onlyRole(BLACKLIST_MANAGER_ROLE) {
@@ -251,13 +241,22 @@ contract StakingVaultOFTUpgradeableHyperlane is
         return 18;
     }
 
+    // Reaches the shared BridgeRateLimiter via a plain external CALL.
+    // rateLimiter == address(0) (not wired yet) behaves like limit == 0: unlimited.
+    function _checkAndUpdateRateLimit(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) private {
+        address limiter = rateLimiter;
+        if (limiter != address(0)) {
+            IBridgeRateLimiter(limiter).checkAndUpdate(transport, remoteId, outbound, amount);
+        }
+    }
+
     function _debit(
         uint256 _amountLD,
         uint256 _minAmountLD,
         uint32 _dstEid
     ) internal virtual override returns (uint256 amountSentLD, uint256 amountReceivedLD) {
         (amountSentLD, amountReceivedLD) = _debitView(_amountLD, _minAmountLD, _dstEid);
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _dstEid, true), amountSentLD);
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _dstEid, true, amountSentLD);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), amountSentLD);
         return (amountSentLD, amountReceivedLD);
@@ -269,7 +268,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
         uint32 _srcEid
     ) internal virtual override returns (uint256 amountReceivedLD) {
         if (_to == address(0x0)) _to = address(0xdead);
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_LZ, _srcEid, false), _amountLD);
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _srcEid, false, _amountLD);
         // Unlock tokens instead of minting
         _update(address(this), _to, _amountLD);
         return _amountLD;
@@ -301,7 +300,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
 
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _destinationDomain, true), _amount);
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _destinationDomain, true, _amount);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), _amount);
 
@@ -351,7 +350,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
         if (recipient == address(0)) revert InvalidRecipient();
 
-        _checkAndUpdateRateLimit(_rlKey(TRANSPORT_HYPERLANE, _origin, false), amount);
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _origin, false, amount);
         // Unlock tokens instead of minting
         _update(address(this), recipient, amount);
 
