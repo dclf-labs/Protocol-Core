@@ -201,29 +201,33 @@ send/receive paths from one shared contract instead of four separate copies.
 
 Not upgradeable: fixing a bug here means deploying a new `BridgeRateLimiter`
 and repointing every token at it via `setRateLimiter(...)`, not a proxy
-upgrade.
+upgrade. `setRateLimiter(...)` rejects a nonzero target with no code, so a
+fat-fingered address is caught at config time instead of silently no-op'ing.
 
 - **A token is unlimited until its `rateLimiter` is wired — `address(0)`
   behaves like `limit == 0`.** Every `_checkAndUpdateRateLimit` call site
   guards the external call with `if (limiter != address(0))`, so an
   implementation upgrade that lands before `setRateLimiter(...)` is called
-  does not brick bridging — it's just unenforced, same as today. That also
-  means the register/configure/wire sequence is advisable for closing the gap
-  quickly, not mandatory to avoid an outage: **batch `registerCaller(token)`,
-  `setRateLimits(token, ...)` on the limiter, and `setRateLimiter(limiterAddr)`
-  on the token atomically** rather than following up separately. The risk of
-  splitting them isn't a timing window (nothing is bricked either way) — it's
-  process drift: once the upgrade or wiring call lands it reads as "the rate
-  limiter shipped," and a `setRateLimits` call left as a follow-up step can
-  quietly go unexecuted for a long time with the bridge sitting unlimited and
-  nothing on-chain looking broken to prompt anyone to notice.
-- **Deregistering a caller only blocks its new outbound sends — inbound
-  keeps enforcing normally (falling back to unlimited if unconfigured).**
-  `BridgeRateLimiter.checkAndUpdate` only requires registration for
-  `outbound == true`; this is a deliberate "stop new outbound bridging, let
-  in-flight inbound drain" lever, not a full pause. Registration otherwise has
-  no enforcement effect — it exists to make that lever available and as an
-  on-chain registry of which addresses are wired to a given limiter.
+  does not brick bridging — it's just unenforced, same as today.
+- **Wiring a token is genuinely all it takes for outbound to work — there is
+  no separate allow-list step to remember.** `checkAndUpdate` treats every
+  caller as allowed by default (a deny-list, not an allow-list): the only way
+  outbound gets blocked is an explicit `blockOutbound(token)` call, never the
+  absence of one. This means `setRateLimits(token, ...)` +
+  `setRateLimiter(limiterAddr)` (in either order) is the only sequence that
+  matters, and **nothing in that sequence — in any order — can brick
+  bridging.** Batch them anyway: not to avoid an outage, but because the risk
+  of splitting them is process drift, not a timing window — once the wiring
+  call lands it reads as "the rate limiter shipped," and a `setRateLimits`
+  call left as a follow-up step can quietly go unexecuted for a long time
+  with the bridge sitting unlimited and nothing on-chain looking broken to
+  prompt anyone to notice.
+- **`blockOutbound(token)` only blocks that token's new outbound sends —
+  inbound keeps enforcing normally (falling back to unlimited if
+  unconfigured).** This is a deliberate "stop new outbound bridging, let
+  in-flight inbound drain" kill switch, not a full pause — inbound is never
+  gated by the block list at all, on any caller. `unblockOutbound(token)`
+  reverses it.
 - **Blocked Hyperlane inbound messages self-heal, but slowly.**
   `Mailbox.process()` only marks a message delivered if `handle()` succeeds,
   so a message that reverts with `RateLimitExceeded` is not consumed.
@@ -246,6 +250,16 @@ upgrade.
   and LZ's fully-manual retry are both ways a legitimate transfer can sit
   stuck without anyone noticing — alerting on this revert per route is what
   actually closes the loop.
+- **The limiter owner can lift every limit on a chain in one transaction —
+  deploy it with that in mind.** One `Ownable2Step` owner controls
+  `setRateLimits`/`resetInFlight`/`blockOutbound` for every token wired to a
+  given `BridgeRateLimiter`, across all of USN, sUSN, and the vault on that
+  chain at once. At minimum, that owner should be the same timelock/multisig
+  that already controls the token proxies' `ProxyAdmin` — don't hand a single
+  EOA or a weaker-quorum multisig blast radius over every bucket on the
+  chain just because this contract is new. A timelock on top of that (with an
+  asymmetric delay — instant lowering/blocking, delayed raising) is a
+  reasonable follow-up, not a blocker for initial deployment.
 
 ## Deployed Contracts
 

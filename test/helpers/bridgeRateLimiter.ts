@@ -20,10 +20,12 @@ export function encodeOFTMsg(recipient: string, amountLD: bigint): string {
   return ethers.concat([recipientB32, ethers.toBeHex(amountSD, 8)]);
 }
 
-// Deploys a BridgeRateLimiter owned by `owner`, registers `caller` (the
-// vault/token under test), and wires it in via setRateLimiter(). Returns the
-// limiter so tests can call setRateLimits(caller, ...) / resetInFlight(caller, ...)
-// / getRateLimit(caller, ...) directly on it.
+// Deploys a BridgeRateLimiter owned by `owner` and wires it into `caller`
+// (the vault/token under test) via setRateLimiter(). No separate
+// "registration" step — outbound is allowed by default (deny-list, not
+// allow-list), so wiring alone is enough. Returns the limiter so tests can
+// call setRateLimits(caller, ...) / resetInFlight(caller, ...) /
+// getRateLimit(caller, ...) directly on it.
 export async function deployAndWireRateLimiter(
   owner: import('@nomicfoundation/hardhat-ethers/signers').HardhatEthersSigner,
   caller: {
@@ -35,8 +37,6 @@ export async function deployAndWireRateLimiter(
   const limiter = (await Factory.connect(owner).deploy(
     await owner.getAddress()
   )) as unknown as BridgeRateLimiter;
-  const callerAddress = await caller.getAddress();
-  await limiter.connect(owner).registerCaller(callerAddress);
   await caller.setRateLimiter(await limiter.getAddress());
   return limiter;
 }

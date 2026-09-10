@@ -1,4 +1,5 @@
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
+import { time } from '@nomicfoundation/hardhat-network-helpers';
 import { expect } from 'chai';
 import { ethers, network, upgrades } from 'hardhat';
 import type {
@@ -155,6 +156,18 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
         .to.emit(vaultSrc, 'RateLimiterSet')
         .withArgs(await newLimiter.getAddress());
     });
+
+    it('reverts when the target has no code', async function () {
+      await expect(
+        vaultSrc.setRateLimiter(await outsider.getAddress())
+      ).to.be.revertedWithCustomError(vaultSrc, 'InvalidRateLimiter');
+    });
+
+    it('allows unwiring back to address(0)', async function () {
+      await expect(vaultSrc.setRateLimiter(ethers.ZeroAddress)).to.not.be
+        .reverted;
+      expect(await vaultSrc.rateLimiter()).to.equal(ethers.ZeroAddress);
+    });
   });
 
   // ── Limiter admin surface ────────────────────────────────────────────────
@@ -200,16 +213,17 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
     });
   });
 
-  describe('checkAndUpdate access control', function () {
-    it('reverts for an unregistered caller on outbound', async function () {
+  describe('checkAndUpdate outbound blocking (deny-list, not allow-list)', function () {
+    it('outbound is allowed by default for any caller — no registration needed', async function () {
       await expect(
         limiterSrc
           .connect(outsider)
           .checkAndUpdate(TRANSPORT_HYPERLANE, HL_DOMAIN, true, ONE)
-      ).to.be.revertedWithCustomError(limiterSrc, 'NotRegisteredCaller');
+      ).to.not.be.reverted;
     });
 
-    it('passes through for an unregistered caller on inbound (falls back to unlimited)', async function () {
+    it('inbound is never blocked, even for an explicitly blocked caller', async function () {
+      await limiterSrc.blockOutbound(await outsider.getAddress());
       await expect(
         limiterSrc
           .connect(outsider)
@@ -217,8 +231,8 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       ).to.not.be.reverted;
     });
 
-    it('deregistering blocks outbound but not inbound for a previously-registered caller', async function () {
-      await limiterSrc.deregisterCaller(await vaultSrc.getAddress());
+    it('blockOutbound blocks outbound but not inbound for a caller', async function () {
+      await limiterSrc.blockOutbound(await vaultSrc.getAddress());
 
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       // Outbound now reverts at the limiter, surfacing as a bare call failure
@@ -229,7 +243,7 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.reverted;
 
-      // Inbound still delivers — deregistration must not strand in-flight funds.
+      // Inbound still delivers — blocking must not strand in-flight funds.
       await seedLockedBalance(vaultSrc, TEN);
       const balBefore = await vaultSrc.balanceOf(await user.getAddress());
       await network.provider.send('hardhat_setBalance', [
@@ -251,13 +265,22 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
         balBefore + TEN
       );
     });
-  });
 
-  describe('registerCaller', function () {
-    it('reverts on zero address', async function () {
+    it('unblockOutbound restores outbound', async function () {
+      await limiterSrc.blockOutbound(await vaultSrc.getAddress());
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await expect(
-        limiterSrc.registerCaller(ethers.ZeroAddress)
-      ).to.be.revertedWithCustomError(limiterSrc, 'ZeroAddress');
+        vaultSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+      ).to.be.reverted;
+
+      await limiterSrc.unblockOutbound(await vaultSrc.getAddress());
+      await expect(
+        vaultSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+      ).to.not.be.reverted;
     });
   });
 
@@ -366,6 +389,34 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       // Settling resets lastUpdated at reconfigure time, so elapsed-since-
       // settle is ~0 here — available should be dust, not a full TEN refill.
       expect(available).to.be.lt(ethers.parseUnits('0.001', 18));
+    });
+
+    it('re-enabling a disabled bucket does not carry stale frozen in-flight forward', async function () {
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+      ]);
+      // Exhaust the bucket
+      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+
+      // Disable (limit == 0) — decay is proportional to limit, so while
+      // disabled the bucket's amountInFlight is frozen and does not decay,
+      // no matter how much real time passes.
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: 0, window: WINDOW },
+      ]);
+      await time.increase(Number(WINDOW * 10n));
+
+      // Re-enable with the same limit. A buggy _settle would carry the
+      // frozen TEN forward and read it as still fully in-flight even though
+      // 10 windows' worth of real time passed while disabled.
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+      ]);
+      const { available } = await limiterSrc.getRateLimit(
+        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+      );
+      expect(available).to.equal(TEN);
     });
   });
 

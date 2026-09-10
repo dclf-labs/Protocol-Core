@@ -14,10 +14,13 @@ import "./interfaces/IBridgeRateLimiter.sol";
  * storage, and any future fix live.
  *
  * Not upgradeable: fixing a bug here means deploying a new limiter and
- * repointing every token's setRateLimiter() at it, not a proxy upgrade. The
- * repoint is a register-caller + setRateLimits + setRateLimiter batch that
- * must land atomically per token — a fresh limiter starts with every bucket
- * at limit == 0 (unlimited) and zero in-flight.
+ * repointing every token at it via setRateLimiter(), not a proxy upgrade.
+ * Wiring a token (setRateLimiter) never needs to be paired with a call here
+ * first — see checkAndUpdate below, there is no allow-list to satisfy before
+ * outbound works. The repoint is only a setRateLimits + setRateLimiter batch
+ * (to close the unenforced gap quickly, not to avoid bricking anything) and a
+ * fresh limiter starts with every bucket at limit == 0 (unlimited) and zero
+ * in-flight.
  *
  * Each (caller, transport, remoteId, outbound) quadruple gets its own
  * independent bucket, keyed off msg.sender so one caller can never read or
@@ -49,41 +52,42 @@ contract BridgeRateLimiter is Ownable2Step, IBridgeRateLimiter {
         uint256 window;
     }
 
-    // Registration only gates OUTBOUND checkAndUpdate calls (see below) — it
-    // is not a hard on/off switch for the caller's storage, just a deliberate
-    // "stop new outbound bridging" lever. Kept as an on-chain registry for
-    // monitoring/tooling as well as enforcement.
-    mapping(address => bool) public registeredCallers;
+    // Deny-list, not allow-list: every caller's outbound is permitted by
+    // default (false = not blocked), so wiring a token (setRateLimiter) never
+    // needs a prior "registration" step to keep bridging working — nothing to
+    // forget, nothing to brick by getting the order wrong. blockOutbound is
+    // purely an opt-in kill switch. Inbound is never gated by this mapping at
+    // all (see checkAndUpdate) so a blocked caller's in-flight funds can still
+    // be delivered.
+    mapping(address => bool) public outboundBlocked;
     mapping(bytes32 => RateLimit) private _limits;
 
-    event CallerRegistered(address indexed caller);
-    event CallerDeregistered(address indexed caller);
+    event OutboundBlocked(address indexed caller);
+    event OutboundUnblocked(address indexed caller);
     event RateLimitSet(address indexed caller, uint8 transport, uint32 remoteId, bool outbound, uint256 limit, uint256 window);
     // key = keccak256(abi.encodePacked(caller, transport, remoteId, outbound))
     event InFlightReset(address indexed caller, bytes32 indexed key);
 
-    error NotRegisteredCaller();
+    error CallerBlocked();
     error InvalidTransport();
     error RateLimitExceeded(uint256 requested, uint256 available);
-    error ZeroAddress();
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
-    // ── Owner: caller registry ──────────────────────────────────────────────
+    // ── Owner: outbound kill switch ──────────────────────────────────────────
 
-    function registerCaller(address caller) external onlyOwner {
-        if (caller == address(0)) revert ZeroAddress();
-        registeredCallers[caller] = true;
-        emit CallerRegistered(caller);
+    // Blocks only NEW outbound sends from `caller` (see checkAndUpdate) —
+    // inbound delivery keeps working so funds already in flight can still
+    // settle. This is a deliberate "stop new outbound, let inbound drain"
+    // kill switch, not a full pause of the token.
+    function blockOutbound(address caller) external onlyOwner {
+        outboundBlocked[caller] = true;
+        emit OutboundBlocked(caller);
     }
 
-    // Deregistering blocks only NEW outbound sends from `caller` (see
-    // checkAndUpdate) — inbound delivery keeps working so funds already
-    // in flight can still settle. This is a deliberate "stop new outbound,
-    // let inbound drain" kill switch, not a full pause of the token.
-    function deregisterCaller(address caller) external onlyOwner {
-        registeredCallers[caller] = false;
-        emit CallerDeregistered(caller);
+    function unblockOutbound(address caller) external onlyOwner {
+        outboundBlocked[caller] = false;
+        emit OutboundUnblocked(caller);
     }
 
     // ── Owner: rate limit config ────────────────────────────────────────────
@@ -109,18 +113,13 @@ contract BridgeRateLimiter is Ownable2Step, IBridgeRateLimiter {
 
     // ── Enforcement ──────────────────────────────────────────────────────────
 
-    // Registration gates outbound only: an unregistered/deregistered caller's
-    // outbound calls revert, but its inbound calls still enforce normally
-    // (falling back to unlimited if nothing is configured, same as any other
-    // caller) so in-flight funds are never stuck mid-bridge because of a
-    // registry change.
     function checkAndUpdate(
         uint8 transport,
         uint32 remoteId,
         bool outbound,
         uint256 amount
     ) external override {
-        if (outbound && !registeredCallers[msg.sender]) revert NotRegisteredCaller();
+        if (outbound && outboundBlocked[msg.sender]) revert CallerBlocked();
 
         RateLimit storage rl = _limits[_key(msg.sender, transport, remoteId, outbound)];
 
@@ -166,12 +165,22 @@ contract BridgeRateLimiter is Ownable2Step, IBridgeRateLimiter {
 
     // Freezes the bucket's decayed-to-date in-flight amount under the OLD
     // limit/window before applying the new ones, then writes the new config.
-    // Without this, raising a limit (or shrinking a window below the elapsed
-    // time) changes the decay rate applied to usage that already accrued
-    // under the old rate — silently wiping or inflating in-flight on a config
-    // change that wasn't meant to reset anything.
+    // Two things this guards against:
+    //   - Reconfiguring an ACTIVE bucket: raising a limit (or shrinking a
+    //     window below the elapsed time) changes the decay rate applied to
+    //     usage that already accrued under the old rate — silently wiping or
+    //     inflating in-flight on a config change that wasn't meant to reset
+    //     anything.
+    //   - Re-enabling a DISABLED bucket (old limit == 0): decay is
+    //     proportional to limit, so while disabled (limit == 0) nothing ever
+    //     decays — amountInFlight sits frozen at whatever it was when
+    //     disabled, however much real time passes. Carrying that frozen value
+    //     forward into a freshly re-enabled bucket would treat time that
+    //     passed while unenforced as if it never happened. Coming from
+    //     limit == 0 always settles to zero instead of computing decay
+    //     against a rate that was never actually in effect.
     function _settle(RateLimit storage rl, uint256 newLimit, uint256 newWindow) private {
-        rl.amountInFlight = _currentInFlight(rl);
+        rl.amountInFlight = rl.limit == 0 ? 0 : _currentInFlight(rl);
         rl.lastUpdated = block.timestamp;
         rl.limit = newLimit;
         rl.window = newWindow;

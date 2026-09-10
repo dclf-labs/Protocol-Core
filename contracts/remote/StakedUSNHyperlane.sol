@@ -39,6 +39,7 @@ contract StakedUSNHyperlane is
     // address(0) means no limiter wired yet: unlimited, same as limit == 0.
     address public rateLimiter;
     event RateLimiterSet(address indexed rateLimiter);
+    error InvalidRateLimiter();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -93,6 +94,7 @@ contract StakedUSNHyperlane is
     // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
     // there directly) — this contract only needs to know which limiter to call.
     function setRateLimiter(address _rateLimiter) external onlyOwner {
+        if (_rateLimiter != address(0) && _rateLimiter.code.length == 0) revert InvalidRateLimiter();
         rateLimiter = _rateLimiter;
         emit RateLimiterSet(_rateLimiter);
     }

@@ -9,6 +9,7 @@ interface IBridgeRateLimiter {
     /// @notice Checks `amount` against the caller's bucket for
     /// (msg.sender, transport, remoteId, outbound) and records it if allowed.
     /// Reverts with RateLimitExceeded if the bucket has insufficient headroom,
-    /// or NotRegisteredCaller if msg.sender is not a registered caller.
+    /// or CallerBlocked if outbound is true and msg.sender's outbound has been
+    /// blocked. Inbound (outbound == false) is never blocked this way.
     function checkAndUpdate(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) external;
 }

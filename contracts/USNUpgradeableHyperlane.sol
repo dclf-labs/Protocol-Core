@@ -58,6 +58,7 @@ contract USNUpgradeableHyperlane is
     error InvalidRemoteToken();
     error InvalidRecipient();
     error OnlyMailboxAllowed();
+    error InvalidRateLimiter();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
@@ -87,6 +88,7 @@ contract USNUpgradeableHyperlane is
     // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
     // there directly) — this contract only needs to know which limiter to call.
     function setRateLimiter(address _rateLimiter) external onlyOwner {
+        if (_rateLimiter != address(0) && _rateLimiter.code.length == 0) revert InvalidRateLimiter();
         rateLimiter = _rateLimiter;
         emit RateLimiterSet(_rateLimiter);
     }

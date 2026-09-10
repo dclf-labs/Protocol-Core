@@ -36,17 +36,6 @@ const config: HardhatUserConfig = {
           },
         },
       },
-      // Matches the pragma pinned by Morpho's morpho-blue-oracles contracts
-      // (StorkAggregatorV3Wrapper.sol, and the vendored morpho-chainlink/ sources).
-      {
-        version: '0.8.21',
-        settings: {
-          optimizer: {
-            enabled: true,
-            runs: 100,
-          },
-        },
-      },
     ],
   },
   finder: {
