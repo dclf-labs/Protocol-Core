@@ -394,16 +394,30 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
     it('re-enabling a disabled bucket does not carry stale frozen in-flight forward', async function () {
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: WINDOW,
+        },
       ]);
       // Exhaust the bucket
-      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+      await vaultSrc
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
 
       // Disable (limit == 0) — decay is proportional to limit, so while
       // disabled the bucket's amountInFlight is frozen and does not decay,
       // no matter how much real time passes.
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: 0, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: 0,
+          window: WINDOW,
+        },
       ]);
       await time.increase(Number(WINDOW * 10n));
 
@@ -411,10 +425,19 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       // frozen TEN forward and read it as still fully in-flight even though
       // 10 windows' worth of real time passed while disabled.
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: WINDOW,
+        },
       ]);
       const { available } = await limiterSrc.getRateLimit(
-        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+        await vaultSrc.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
       );
       expect(available).to.equal(TEN);
     });
