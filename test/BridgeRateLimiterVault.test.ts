@@ -278,12 +278,23 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
     it('raising the limit mid-window does not retroactively wipe accrued in-flight', async function () {
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: WINDOW,
+        },
       ]);
       // Exhaust the bucket
-      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+      await vaultSrc
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
       const { available: availableBefore } = await limiterSrc.getRateLimit(
-        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+        await vaultSrc.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
       );
       expect(availableBefore).to.equal(0n);
 
@@ -292,10 +303,19 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       // the new (much faster) rate the whole time.
       const NEW_LIMIT = ethers.parseUnits('1000', 18);
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: NEW_LIMIT, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: NEW_LIMIT,
+          window: WINDOW,
+        },
       ]);
       const { available: availableAfter } = await limiterSrc.getRateLimit(
-        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+        await vaultSrc.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
       );
       // Within a few seconds of real decay under the OLD (10/86400s) rate —
       // nowhere near what a naive read against the NEW, much larger limit
@@ -310,9 +330,17 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       const BIG_WINDOW = 1_000_000n;
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: BIG_WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: BIG_WINDOW,
+        },
       ]);
-      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+      await vaultSrc
+        .connect(user)
+        .sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
 
       // Shrink the window to something the (tiny, real) elapsed time since
       // the ORIGINAL lastUpdated would already exceed — a naive
@@ -321,10 +349,19 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       // TEN, erasing the send that just happened.
       const SMALL_WINDOW = 2n;
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: SMALL_WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: TEN,
+          window: SMALL_WINDOW,
+        },
       ]);
       const { available } = await limiterSrc.getRateLimit(
-        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+        await vaultSrc.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
       );
       // Settling resets lastUpdated at reconfigure time, so elapsed-since-
       // settle is ~0 here — available should be dust, not a full TEN refill.
@@ -336,16 +373,29 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
     it('does not revert when limit is near type(uint256).max', async function () {
       const HUGE_LIMIT = ethers.MaxUint256 - 1n;
       await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
-        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: HUGE_LIMIT, window: WINDOW },
+        {
+          transport: TRANSPORT_HYPERLANE,
+          remoteId: HL_DOMAIN,
+          outbound: true,
+          limit: HUGE_LIMIT,
+          window: WINDOW,
+        },
       ]);
       const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
       await expect(
-        vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+        vaultSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.not.be.reverted;
 
       // getRateLimit must also not revert when computing decay for this bucket
       await expect(
-        limiterSrc.getRateLimit(await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+        limiterSrc.getRateLimit(
+          await vaultSrc.getAddress(),
+          TRANSPORT_HYPERLANE,
+          HL_DOMAIN,
+          true
+        )
       ).to.not.be.reverted;
     });
   });
