@@ -201,12 +201,152 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
   });
 
   describe('checkAndUpdate access control', function () {
-    it('reverts for an unregistered caller', async function () {
+    it('reverts for an unregistered caller on outbound', async function () {
       await expect(
         limiterSrc
           .connect(outsider)
           .checkAndUpdate(TRANSPORT_HYPERLANE, HL_DOMAIN, true, ONE)
       ).to.be.revertedWithCustomError(limiterSrc, 'NotRegisteredCaller');
+    });
+
+    it('passes through for an unregistered caller on inbound (falls back to unlimited)', async function () {
+      await expect(
+        limiterSrc
+          .connect(outsider)
+          .checkAndUpdate(TRANSPORT_HYPERLANE, HL_DOMAIN, false, ONE)
+      ).to.not.be.reverted;
+    });
+
+    it('deregistering blocks outbound but not inbound for a previously-registered caller', async function () {
+      await limiterSrc.deregisterCaller(await vaultSrc.getAddress());
+
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+      // Outbound now reverts at the limiter, surfacing as a bare call failure
+      // through the vault (the vault has no special handling for this error).
+      await expect(
+        vaultSrc
+          .connect(user)
+          .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+      ).to.be.reverted;
+
+      // Inbound still delivers — deregistration must not strand in-flight funds.
+      await seedLockedBalance(vaultSrc, TEN);
+      const balBefore = await vaultSrc.balanceOf(await user.getAddress());
+      await network.provider.send('hardhat_setBalance', [
+        await mockMailbox.getAddress(),
+        '0x1000000000000000000',
+      ]);
+      const mailboxSigner = await ethers.getImpersonatedSigner(
+        await mockMailbox.getAddress()
+      );
+      const remoteToken = await vaultSrc.remoteTokens(HL_DOMAIN);
+      const message = ethers.concat([
+        ethers.zeroPadValue(await user.getAddress(), 32),
+        ethers.zeroPadValue(ethers.toBeHex(TEN), 32),
+      ]);
+      await expect(
+        vaultSrc.connect(mailboxSigner).handle(HL_DOMAIN, remoteToken, message)
+      ).to.not.be.reverted;
+      expect(await vaultSrc.balanceOf(await user.getAddress())).to.equal(
+        balBefore + TEN
+      );
+    });
+  });
+
+  describe('registerCaller', function () {
+    it('reverts on zero address', async function () {
+      await expect(
+        limiterSrc.registerCaller(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(limiterSrc, 'ZeroAddress');
+    });
+  });
+
+  describe('ownership (Ownable2Step)', function () {
+    it('requires acceptOwnership — transferOwnership alone does not hand over control', async function () {
+      await limiterSrc.transferOwnership(await outsider.getAddress());
+      expect(await limiterSrc.owner()).to.equal(await owner.getAddress());
+      expect(await limiterSrc.pendingOwner()).to.equal(
+        await outsider.getAddress()
+      );
+
+      await limiterSrc.connect(outsider).acceptOwnership();
+      expect(await limiterSrc.owner()).to.equal(await outsider.getAddress());
+    });
+  });
+
+  describe('mid-window reconfiguration settles before applying new limit/window (M-1)', function () {
+    it('raising the limit mid-window does not retroactively wipe accrued in-flight', async function () {
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: WINDOW },
+      ]);
+      // Exhaust the bucket
+      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+      const { available: availableBefore } = await limiterSrc.getRateLimit(
+        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+      );
+      expect(availableBefore).to.equal(0n);
+
+      // Raise the limit — settling means the already-accrued TEN is preserved
+      // under the new limit, not reinterpreted as if it had been decaying at
+      // the new (much faster) rate the whole time.
+      const NEW_LIMIT = ethers.parseUnits('1000', 18);
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: NEW_LIMIT, window: WINDOW },
+      ]);
+      const { available: availableAfter } = await limiterSrc.getRateLimit(
+        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+      );
+      // Within a few seconds of real decay under the OLD (10/86400s) rate —
+      // nowhere near what a naive read against the NEW, much larger limit
+      // would produce.
+      expect(availableAfter).to.be.closeTo(
+        NEW_LIMIT - TEN,
+        ethers.parseUnits('0.01', 18)
+      );
+    });
+
+    it('shrinking the window below the elapsed time does not retroactively zero in-flight', async function () {
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+      const BIG_WINDOW = 1_000_000n;
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: BIG_WINDOW },
+      ]);
+      await vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, TEN, { value: 0 });
+
+      // Shrink the window to something the (tiny, real) elapsed time since
+      // the ORIGINAL lastUpdated would already exceed — a naive
+      // implementation reading elapsed-since-old-lastUpdated against the NEW
+      // window would treat the bucket as "expired" and refill it to the full
+      // TEN, erasing the send that just happened.
+      const SMALL_WINDOW = 2n;
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: TEN, window: SMALL_WINDOW },
+      ]);
+      const { available } = await limiterSrc.getRateLimit(
+        await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true
+      );
+      // Settling resets lastUpdated at reconfigure time, so elapsed-since-
+      // settle is ~0 here — available should be dust, not a full TEN refill.
+      expect(available).to.be.lt(ethers.parseUnits('0.001', 18));
+    });
+  });
+
+  describe('overflow-safe decay with a very large limit (M-2)', function () {
+    it('does not revert when limit is near type(uint256).max', async function () {
+      const HUGE_LIMIT = ethers.MaxUint256 - 1n;
+      await limiterSrc.setRateLimits(await vaultSrc.getAddress(), [
+        { transport: TRANSPORT_HYPERLANE, remoteId: HL_DOMAIN, outbound: true, limit: HUGE_LIMIT, window: WINDOW },
+      ]);
+      const recipient = ethers.zeroPadValue(await other.getAddress(), 32);
+      await expect(
+        vaultSrc.connect(user).sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
+      ).to.not.be.reverted;
+
+      // getRateLimit must also not revert when computing decay for this bucket
+      await expect(
+        limiterSrc.getRateLimit(await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+      ).to.not.be.reverted;
     });
   });
 
