@@ -333,9 +333,7 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
     ]);
     const balBefore = await proxy.balanceOf(await recipient.getAddress());
     await expect(
-      proxy
-        .connect(mailboxSigner)
-        .handle(PRE_WIRE_DOMAIN, remoteToken, message)
+      proxy.connect(mailboxSigner).handle(PRE_WIRE_DOMAIN, remoteToken, message)
     ).to.not.be.reverted;
     expect(await proxy.balanceOf(await recipient.getAddress())).to.equal(
       balBefore + amount
