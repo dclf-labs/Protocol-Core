@@ -15,6 +15,18 @@ import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
 import "./interfaces/IBridgeRateLimiter.sol";
 
+// Deployed size at the project-default runs:100: ~23.24 KiB, ~0.76 KiB (778
+// bytes) under the 24 576-byte EIP-170 limit — this contract carries no
+// per-file optimizer override. That margin is real but not large; before
+// reaching for runs:1 (or a per-file override) again if a future addition
+// eats into it, look at moving any stateless, non-owner-gated wrapper
+// functions (permit-based deposit variants, slippage-check wrappers, and
+// similar — see contracts/periphery/StakingVault.sol for the pattern used
+// elsewhere) out to a separate non-upgradeable periphery router first. Note
+// runs:200 was tried and does fit (~361 bytes of headroom) but was not kept:
+// the marginal gas win over runs:100 was small and not worth roughly halving
+// this margin — see PR history for the numbers.
+
 // Separate storage contract to avoid storage collisions in upgrades
 abstract contract StakingVaultStorageV1 {
     bytes32 internal constant STAKING_VAULT_STORAGE_POSITION = keccak256("StakingVault.storage.location");

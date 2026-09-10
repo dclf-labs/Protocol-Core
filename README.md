@@ -190,23 +190,40 @@ Same architecture as USNOFTHyperlane but for the sUSN staked token.
 
 Upgradeable ERC4626 vault combined with LayerZero OFT for cross-chain sUSN transfers.
 
-#### BridgeRateLimiterUpgradeable.sol
+#### BridgeRateLimiter.sol
 
-Sliding-window rate limiter mixed into the cross-chain contracts above (USN, sUSN,
-and the staking vault), gating both LayerZero and Hyperlane send/receive paths.
+Standalone (non-upgradeable) sliding-window rate limiter, deployed once per
+chain and shared by every bridge-enabled contract on that chain (USN, sUSN,
+the staking vault, StakedUSNHyperlane). Each token/vault only holds a
+`rateLimiter` address and calls `IBridgeRateLimiter.checkAndUpdate(...)` via a
+plain external `CALL` — not inheritance — gating both LayerZero and Hyperlane
+send/receive paths from one shared contract instead of four separate copies.
 
-- **Limits are inert until configured — batch `setRateLimits(...)` with the
-  upgrade rather than following up separately.** `limit == 0` means unlimited,
-  and that's the state every bucket starts in immediately after upgrading a
-  proxy to a rate-limiter-aware implementation. This doesn't introduce new
-  exposure — the bridge is already unlimited today, before this upgrade even
-  ships — but a multisig batch executes `upgradeAndCall` and `setRateLimits(...)`
-  for every `(transport, remoteId, outbound)` triple atomically at zero extra
-  cost, so there's no reason to split them. The real risk of splitting them
-  isn't a timing window; it's process drift — once the upgrade lands it reads
-  as "the rate limiter shipped," and a `setRateLimits` call left as a follow-up
-  step can quietly go unexecuted for a long time with nothing on-chain looking
-  broken to prompt anyone to notice.
+Not upgradeable: fixing a bug here means deploying a new `BridgeRateLimiter`
+and repointing every token at it via `setRateLimiter(...)`, not a proxy
+upgrade.
+
+- **A token is unlimited until its `rateLimiter` is wired — `address(0)`
+  behaves like `limit == 0`.** Every `_checkAndUpdateRateLimit` call site
+  guards the external call with `if (limiter != address(0))`, so an
+  implementation upgrade that lands before `setRateLimiter(...)` is called
+  does not brick bridging — it's just unenforced, same as today. That also
+  means the register/configure/wire sequence is advisable for closing the gap
+  quickly, not mandatory to avoid an outage: **batch `registerCaller(token)`,
+  `setRateLimits(token, ...)` on the limiter, and `setRateLimiter(limiterAddr)`
+  on the token atomically** rather than following up separately. The risk of
+  splitting them isn't a timing window (nothing is bricked either way) — it's
+  process drift: once the upgrade or wiring call lands it reads as "the rate
+  limiter shipped," and a `setRateLimits` call left as a follow-up step can
+  quietly go unexecuted for a long time with the bridge sitting unlimited and
+  nothing on-chain looking broken to prompt anyone to notice.
+- **Deregistering a caller only blocks its new outbound sends — inbound
+  keeps enforcing normally (falling back to unlimited if unconfigured).**
+  `BridgeRateLimiter.checkAndUpdate` only requires registration for
+  `outbound == true`; this is a deliberate "stop new outbound bridging, let
+  in-flight inbound drain" lever, not a full pause. Registration otherwise has
+  no enforcement effect — it exists to make that lever available and as an
+  on-chain registry of which addresses are wired to a given limiter.
 - **Blocked Hyperlane inbound messages self-heal, but slowly.**
   `Mailbox.process()` only marks a message delivered if `handle()` succeeds,
   so a message that reverts with `RateLimitExceeded` is not consumed.

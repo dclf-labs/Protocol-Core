@@ -302,6 +302,91 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
     );
   });
 
+  // ── Fail-open before the limiter is wired ─────────────────────────────────
+  //
+  // ORDERING NOTE: must run after the raw-slot describe above (which asserts
+  // rateLimiter is still address(0)) and before "rate limiter enforcement"
+  // below (which wires it). Every _checkAndUpdateRateLimit call site guards
+  // the external call with `if (limiter != address(0))`, so an implementation
+  // upgrade that lands before setRateLimiter() is called must NOT brick
+  // bridging — it's simply unenforced, same as pre-upgrade. Uses its own
+  // Hyperlane domains (50/51) so it can't collide with the "rate limiter
+  // enforcement" describe's own setup below.
+
+  it('bridging still works immediately after upgrade, before the limiter is wired (fail-open, not fail-closed)', async function () {
+    this.timeout(60_000);
+    // If the vault is paused, _update reverts regardless of the limiter —
+    // unrelated to what this test is isolating.
+    if (await proxy.paused()) this.skip();
+    expect(await proxy.rateLimiter()).to.equal(ethers.ZeroAddress);
+
+    const INBOUND_DOMAIN = 50;
+    const OUTBOUND_DOMAIN = 51;
+    const MockMailboxFactory = await ethers.getContractFactory('MockMailbox');
+    const mockMailbox = await MockMailboxFactory.deploy();
+    const mockMailboxAddr = await mockMailbox.getAddress();
+
+    await fund(snap.owner);
+    const ownerSigner = await ethers.getImpersonatedSigner(snap.owner);
+    await proxy.connect(ownerSigner).configureHyperlane(mockMailboxAddr);
+    const inboundRemoteToken = ethers.zeroPadValue(
+      ethers.Wallet.createRandom().address,
+      32
+    );
+    await proxy
+      .connect(ownerSigner)
+      .registerHyperlaneRemoteToken(INBOUND_DOMAIN, inboundRemoteToken);
+    const outboundRemoteToken = ethers.zeroPadValue(
+      ethers.Wallet.createRandom().address,
+      32
+    );
+    await proxy
+      .connect(ownerSigner)
+      .registerHyperlaneRemoteToken(OUTBOUND_DOMAIN, outboundRemoteToken);
+
+    await fund(mockMailboxAddr);
+    const mailboxSigner = await ethers.getImpersonatedSigner(mockMailboxAddr);
+    const [, , testUser, recipient] = await ethers.getSigners();
+    const amount = ethers.parseUnits('1', 18);
+
+    // Inbound: handle() unlocks from the vault's own escrowed balance — must
+    // succeed with nothing wired.
+    const inboundMessage = ethers.concat([
+      ethers.zeroPadValue(await recipient.getAddress(), 32),
+      ethers.zeroPadValue(ethers.toBeHex(amount), 32),
+    ]);
+    const balBefore = await proxy.balanceOf(await recipient.getAddress());
+    await expect(
+      proxy
+        .connect(mailboxSigner)
+        .handle(INBOUND_DOMAIN, inboundRemoteToken, inboundMessage)
+    ).to.not.be.reverted;
+    expect(await proxy.balanceOf(await recipient.getAddress())).to.equal(
+      balBefore + amount
+    );
+
+    // Outbound: fund testUser the same way, then sendTokensViaHyperlane()
+    // must succeed with nothing wired.
+    const fundMessage = ethers.concat([
+      ethers.zeroPadValue(await testUser.getAddress(), 32),
+      ethers.zeroPadValue(ethers.toBeHex(amount), 32),
+    ]);
+    await proxy
+      .connect(mailboxSigner)
+      .handle(INBOUND_DOMAIN, inboundRemoteToken, fundMessage);
+    const outboundRecipient = ethers.zeroPadValue(
+      await recipient.getAddress(),
+      32
+    );
+    await expect(
+      proxy
+        .connect(testUser)
+        .sendTokensViaHyperlane(OUTBOUND_DOMAIN, outboundRecipient, amount, {
+          value: 0,
+        })
+    ).to.not.be.reverted;
+  });
+
   // ── Rate limiter wired up on the upgraded proxy ───────────────────────────
   //
   // These tests confirm the standalone BridgeRateLimiter is correctly wired
