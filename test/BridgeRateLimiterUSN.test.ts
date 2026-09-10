@@ -129,15 +129,17 @@ describe('BridgeRateLimiter — USNUpgradeableHyperlane', function () {
   describe('setRateLimits', function () {
     it('reverts for non-owner', async function () {
       await expect(
-        limiterSrc.connect(outsider).setRateLimits(await tokenSrc.getAddress(), [
-          {
-            transport: TRANSPORT_HYPERLANE,
-            remoteId: HL_DOMAIN,
-            outbound: true,
-            limit: LIMIT,
-            window: WINDOW,
-          },
-        ])
+        limiterSrc
+          .connect(outsider)
+          .setRateLimits(await tokenSrc.getAddress(), [
+            {
+              transport: TRANSPORT_HYPERLANE,
+              remoteId: HL_DOMAIN,
+              outbound: true,
+              limit: LIMIT,
+              window: WINDOW,
+            },
+          ])
       ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 
@@ -186,7 +188,12 @@ describe('BridgeRateLimiter — USNUpgradeableHyperlane', function () {
       await expect(
         limiterSrc
           .connect(outsider)
-          .resetInFlight(await tokenSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+          .resetInFlight(
+            await tokenSrc.getAddress(),
+            TRANSPORT_HYPERLANE,
+            HL_DOMAIN,
+            true
+          )
       ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 

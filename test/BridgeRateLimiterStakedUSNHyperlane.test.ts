@@ -350,7 +350,12 @@ describe('BridgeRateLimiter — StakedUSNHyperlane', function () {
       await expect(
         limiter
           .connect(outsider)
-          .resetInFlight(await token.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+          .resetInFlight(
+            await token.getAddress(),
+            TRANSPORT_HYPERLANE,
+            HL_DOMAIN,
+            true
+          )
       ).to.be.revertedWithCustomError(limiter, 'OwnableUnauthorizedAccount');
     });
 
@@ -362,7 +367,12 @@ describe('BridgeRateLimiter — StakedUSNHyperlane', function () {
         )
       );
       await expect(
-        limiter.resetInFlight(await token.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+        limiter.resetInFlight(
+          await token.getAddress(),
+          TRANSPORT_HYPERLANE,
+          HL_DOMAIN,
+          true
+        )
       )
         .to.emit(limiter, 'InFlightReset')
         .withArgs(await token.getAddress(), expectedKey);
@@ -389,7 +399,12 @@ describe('BridgeRateLimiter — StakedUSNHyperlane', function () {
           .sendTokensViaHyperlane(HL_DOMAIN, recipient, ONE, { value: 0 })
       ).to.be.revertedWithCustomError(limiter, 'RateLimitExceeded');
 
-      await limiter.resetInFlight(await token.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true);
+      await limiter.resetInFlight(
+        await token.getAddress(),
+        TRANSPORT_HYPERLANE,
+        HL_DOMAIN,
+        true
+      );
 
       await seedBalance(token, await user.getAddress(), LIMIT);
       await expect(

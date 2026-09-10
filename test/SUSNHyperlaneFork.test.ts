@@ -336,7 +336,9 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
 
       limiter = await deployAndWireRateLimiter(
         ownerSigner,
-        proxy.connect(ownerSigner) as unknown as StakingVaultOFTUpgradeableHyperlane
+        proxy.connect(
+          ownerSigner
+        ) as unknown as StakingVaultOFTUpgradeableHyperlane
       );
 
       // Configure a fresh MockMailbox so Hyperlane inbound is reachable
@@ -364,22 +366,24 @@ describe('StakingVaultOFTUpgradeableHyperlane — mainnet fork upgrade safety', 
         .registerHyperlaneRemoteToken(HL_DOMAIN, remoteToken);
 
       // Set rate limits for both directions under test
-      await limiter.connect(ownerSigner).setRateLimits(await proxy.getAddress(), [
-        {
-          transport: TRANSPORT_LZ,
-          remoteId: SOPHON_EID,
-          outbound: true,
-          limit: RATE_LIMIT,
-          window: WINDOW,
-        },
-        {
-          transport: TRANSPORT_HYPERLANE,
-          remoteId: HL_DOMAIN,
-          outbound: false,
-          limit: RATE_LIMIT,
-          window: WINDOW,
-        },
-      ]);
+      await limiter
+        .connect(ownerSigner)
+        .setRateLimits(await proxy.getAddress(), [
+          {
+            transport: TRANSPORT_LZ,
+            remoteId: SOPHON_EID,
+            outbound: true,
+            limit: RATE_LIMIT,
+            window: WINDOW,
+          },
+          {
+            transport: TRANSPORT_HYPERLANE,
+            remoteId: HL_DOMAIN,
+            outbound: false,
+            limit: RATE_LIMIT,
+            window: WINDOW,
+          },
+        ]);
     });
 
     it('getRateLimit reflects the configured LZ outbound limit', async function () {

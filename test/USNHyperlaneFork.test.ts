@@ -1,6 +1,9 @@
 import { expect } from 'chai';
 import { ethers, network, upgrades } from 'hardhat';
-import type { USNUpgradeableHyperlane, BridgeRateLimiter } from '../typechain-types';
+import type {
+  USNUpgradeableHyperlane,
+  BridgeRateLimiter,
+} from '../typechain-types';
 import {
   TRANSPORT_LZ,
   TRANSPORT_HYPERLANE,
@@ -338,22 +341,24 @@ describe('USNUpgradeableHyperlane — mainnet fork upgrade safety', function () 
         .registerHyperlaneRemoteToken(HL_DOMAIN, remoteToken);
 
       // Set rate limits for both directions under test
-      await limiter.connect(ownerSigner).setRateLimits(await proxy.getAddress(), [
-        {
-          transport: TRANSPORT_LZ,
-          remoteId: SOPHON_EID,
-          outbound: true,
-          limit: RATE_LIMIT,
-          window: WINDOW,
-        },
-        {
-          transport: TRANSPORT_HYPERLANE,
-          remoteId: HL_DOMAIN,
-          outbound: false,
-          limit: RATE_LIMIT,
-          window: WINDOW,
-        },
-      ]);
+      await limiter
+        .connect(ownerSigner)
+        .setRateLimits(await proxy.getAddress(), [
+          {
+            transport: TRANSPORT_LZ,
+            remoteId: SOPHON_EID,
+            outbound: true,
+            limit: RATE_LIMIT,
+            window: WINDOW,
+          },
+          {
+            transport: TRANSPORT_HYPERLANE,
+            remoteId: HL_DOMAIN,
+            outbound: false,
+            limit: RATE_LIMIT,
+            window: WINDOW,
+          },
+        ]);
     });
 
     it('getRateLimit reflects the configured LZ outbound limit', async function () {

@@ -162,15 +162,17 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
   describe('setRateLimits', function () {
     it('reverts for non-owner', async function () {
       await expect(
-        limiterSrc.connect(outsider).setRateLimits(await vaultSrc.getAddress(), [
-          {
-            transport: TRANSPORT_HYPERLANE,
-            remoteId: HL_DOMAIN,
-            outbound: true,
-            limit: LIMIT,
-            window: WINDOW,
-          },
-        ])
+        limiterSrc
+          .connect(outsider)
+          .setRateLimits(await vaultSrc.getAddress(), [
+            {
+              transport: TRANSPORT_HYPERLANE,
+              remoteId: HL_DOMAIN,
+              outbound: true,
+              limit: LIMIT,
+              window: WINDOW,
+            },
+          ])
       ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 
@@ -491,7 +493,12 @@ describe('BridgeRateLimiter — StakingVaultOFTUpgradeableHyperlane', function (
       await expect(
         limiterSrc
           .connect(outsider)
-          .resetInFlight(await vaultSrc.getAddress(), TRANSPORT_HYPERLANE, HL_DOMAIN, true)
+          .resetInFlight(
+            await vaultSrc.getAddress(),
+            TRANSPORT_HYPERLANE,
+            HL_DOMAIN,
+            true
+          )
       ).to.be.revertedWithCustomError(limiterSrc, 'OwnableUnauthorizedAccount');
     });
 
