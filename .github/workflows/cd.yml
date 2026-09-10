@@ -5,6 +5,14 @@ on: [push, pull_request]
 env:
   SOLC_VERSION: ${{ secrets.SOLC_VERSION || '0.8.28' }}
   SOLIDITY_OPTIMIZER: ${{ secrets.SOLIDITY_OPTIMIZER }}
+  # Falls back to a free public endpoint so the mainnet fork upgrade-safety
+  # suites (USNHyperlaneFork, SUSNHyperlaneFork) actually run in CI instead of
+  # skipping — set the ETHEREUM_MAINNET_RPC_URL repo secret to use a private
+  # RPC instead. The repo secret is now set for same-repo runs; this fallback
+  # still matters for PRs from forks, which don't get repo secrets at all.
+  # ethereum-rpc.publicnode.com 403s GitHub Actions runner IPs — eth.drpc.org
+  # verified working (35/35 fork tests passing) as of 2026-09-11.
+  ETHEREUM_MAINNET_RPC_URL: ${{ secrets.ETHEREUM_MAINNET_RPC_URL || 'https://eth.drpc.org' }}
 
 jobs:
   cd:

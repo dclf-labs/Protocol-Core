@@ -6,15 +6,26 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "./lzv2-upgradeable/oft-upgradeable/OFTUpgradeable.sol";
 import "./interfaces/IStakingVaultUpgradeableHyperlane.sol";
 import "./interfaces/IWithdrawalHandler.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
+import "./interfaces/IBridgeRateLimiter.sol";
+
+// Deployed size at the project-default runs:100: ~23.24 KiB, ~0.76 KiB (778
+// bytes) under the 24 576-byte EIP-170 limit — this contract carries no
+// per-file optimizer override. That margin is real but not large; before
+// reaching for runs:1 (or a per-file override) again if a future addition
+// eats into it, look at moving any stateless, non-owner-gated wrapper
+// functions (permit-based deposit variants, slippage-check wrappers, and
+// similar — see contracts/periphery/StakingVault.sol for the pattern used
+// elsewhere) out to a separate non-upgradeable periphery router first. Note
+// runs:200 was tried and does fit (~361 bytes of headroom) but was not kept:
+// the marginal gas win over runs:100 was small and not worth roughly halving
+// this margin — see PR history for the numbers.
 
 // Separate storage contract to avoid storage collisions in upgrades
 abstract contract StakingVaultStorageV1 {
@@ -58,8 +69,10 @@ contract StakingVaultOFTUpgradeableHyperlane is
     using SafeERC20 for IERC20;
 
     // Constants
-    bytes32 public constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
+    bytes32 internal constant REBASE_MANAGER_ROLE = keccak256("REBASE_MANAGER_ROLE");
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
+    uint8 internal constant TRANSPORT_LZ = 0;
+    uint8 internal constant TRANSPORT_HYPERLANE = 1;
 
     // Hyperlane storage
     IMailbox public mailbox;
@@ -67,7 +80,13 @@ contract StakingVaultOFTUpgradeableHyperlane is
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
 
-    uint256 public constant STUCK_MESSAGE_TIMELOCK = 48 hours;
+    // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
+    // address(0) means no limiter wired yet: unlimited, same as limit == 0.
+    address public rateLimiter;
+    event RateLimiterSet(address indexed rateLimiter);
+    error InvalidRateLimiter();
+
+    uint256 internal constant STUCK_MESSAGE_TIMELOCK = 48 hours;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
@@ -106,6 +125,17 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
+    }
+
+    // ── Rate limiter wiring ──────────────────────────────────────────────────
+
+    // Rate limit config/reset live on the BridgeRateLimiter itself (its owner
+    // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
+    // there directly) — this contract only needs to know which limiter to call.
+    function setRateLimiter(address _rateLimiter) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (_rateLimiter != address(0) && _rateLimiter.code.length == 0) revert InvalidRateLimiter();
+        rateLimiter = _rateLimiter;
+        emit RateLimiterSet(_rateLimiter);
     }
 
     function blacklistAccount(address account) external onlyRole(BLACKLIST_MANAGER_ROLE) {
@@ -172,34 +202,6 @@ contract StakingVaultOFTUpgradeableHyperlane is
         emit WithdrawalDemandCreated(msg.sender, assets, block.timestamp);
     }
 
-    function depositWithPermit(
-        uint256 assets,
-        address receiver,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external returns (uint256) {
-        try IERC20Permit(address(asset())).permit(msg.sender, address(this), assets, deadline, v, r, s) {} catch {}
-        return deposit(assets, receiver);
-    }
-
-    function mintWithSlippageCheck(uint256 shares, address receiver, uint256 maxAssets) external returns (uint256) {
-        uint256 assets = previewMint(shares);
-        if (assets > maxAssets) revert SlippageExceeded(assets, maxAssets);
-        return mint(shares, receiver);
-    }
-
-    function depositWithSlippageCheck(
-        uint256 assets,
-        address receiver,
-        uint256 minSharesOut
-    ) external returns (uint256) {
-        uint256 shares = previewDeposit(assets);
-        if (shares < minSharesOut) revert SlippageExceeded(shares, minSharesOut);
-        return deposit(assets, receiver);
-    }
-
     function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
         StakingVaultStorage storage s = getStakingVaultStorage();
         if (owner != msg.sender) revert Unauthorized();
@@ -230,28 +232,6 @@ contract StakingVaultOFTUpgradeableHyperlane is
         return super.redeem(shares, receiver, owner);
     }
 
-    function withdrawWithSlippageCheck(
-        uint256 assets,
-        address receiver,
-        address owner,
-        uint256 maxSharesBurned
-    ) external returns (uint256) {
-        uint256 shares = previewWithdraw(assets);
-        if (shares > maxSharesBurned) revert SlippageExceeded(shares, maxSharesBurned);
-        return withdraw(assets, receiver, owner);
-    }
-
-    function redeemWithSlippageCheck(
-        uint256 shares,
-        address receiver,
-        address owner,
-        uint256 minAssetsOut
-    ) external returns (uint256) {
-        uint256 assets = previewRedeem(shares);
-        if (assets < minAssetsOut) revert SlippageExceeded(assets, minAssetsOut);
-        return redeem(shares, receiver, owner);
-    }
-
     function _update(
         address from,
         address to,
@@ -275,13 +255,22 @@ contract StakingVaultOFTUpgradeableHyperlane is
         return 18;
     }
 
+    // Reaches the shared BridgeRateLimiter via a plain external CALL.
+    // rateLimiter == address(0) (not wired yet) behaves like limit == 0: unlimited.
+    function _checkAndUpdateRateLimit(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) private {
+        address limiter = rateLimiter;
+        if (limiter != address(0)) {
+            IBridgeRateLimiter(limiter).checkAndUpdate(transport, remoteId, outbound, amount);
+        }
+    }
+
     function _debit(
         uint256 _amountLD,
         uint256 _minAmountLD,
         uint32 _dstEid
     ) internal virtual override returns (uint256 amountSentLD, uint256 amountReceivedLD) {
         (amountSentLD, amountReceivedLD) = _debitView(_amountLD, _minAmountLD, _dstEid);
-
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _dstEid, true, amountSentLD);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), amountSentLD);
         return (amountSentLD, amountReceivedLD);
@@ -290,10 +279,10 @@ contract StakingVaultOFTUpgradeableHyperlane is
     function _credit(
         address _to,
         uint256 _amountLD,
-        uint32 /*_srcEid*/
+        uint32 _srcEid
     ) internal virtual override returns (uint256 amountReceivedLD) {
         if (_to == address(0x0)) _to = address(0xdead);
-
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _srcEid, false, _amountLD);
         // Unlock tokens instead of minting
         _update(address(this), _to, _amountLD);
         return _amountLD;
@@ -325,6 +314,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
 
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _destinationDomain, true, _amount);
         // Lock tokens instead of burning
         _update(msg.sender, address(this), _amount);
 
@@ -374,6 +364,7 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
         if (recipient == address(0)) revert InvalidRecipient();
 
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _origin, false, amount);
         // Unlock tokens instead of minting
         _update(address(this), recipient, amount);
 
