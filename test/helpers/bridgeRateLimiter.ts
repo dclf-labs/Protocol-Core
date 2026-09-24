@@ -1,6 +1,7 @@
 import { ethers, network } from 'hardhat';
 import type {
   USNUpgradeableHyperlane,
+  USNOFTHyperlane,
   StakedUSNOFTHyperlane,
   StakingVaultOFTUpgradeableHyperlane,
   BridgeRateLimiter,
@@ -45,6 +46,7 @@ export async function lzReceiveAs(
   endpointAddress: string,
   token:
     | USNUpgradeableHyperlane
+    | USNOFTHyperlane
     | StakedUSNOFTHyperlane
     | StakingVaultOFTUpgradeableHyperlane,
   srcEid: number,
