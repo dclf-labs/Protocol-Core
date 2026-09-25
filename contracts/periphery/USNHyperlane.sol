@@ -10,6 +10,7 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20Burnable
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
+import "../interfaces/IBridgeRateLimiter.sol";
 
 contract USNHyperlane is
     AccessControlUpgradeable,
@@ -20,6 +21,8 @@ contract USNHyperlane is
     IMessageRecipient
 {
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
+    uint8 internal constant TRANSPORT_LZ = 0;
+    uint8 internal constant TRANSPORT_HYPERLANE = 1;
 
     mapping(address => bool) public blacklist;
     uint256 public constant VERSION = 1;
@@ -29,6 +32,10 @@ contract USNHyperlane is
     IInterchainSecurityModule private _interchainSecurityModule;
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
+
+    // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
+    // address(0) means no limiter wired yet: unlimited, same as limit == 0.
+    address public rateLimiter;
 
     constructor() {}
 
@@ -83,6 +90,26 @@ contract USNHyperlane is
         emit RemoteTokenSet(_domain, _remoteToken);
     }
 
+    // ── Rate limiter wiring ──────────────────────────────────────────────────
+
+    // Rate limit config/reset live on the BridgeRateLimiter itself (its owner
+    // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
+    // there directly) — this contract only needs to know which limiter to call.
+    function setRateLimiter(address _rateLimiter) external onlyOwner {
+        if (_rateLimiter != address(0) && _rateLimiter.code.length == 0) revert InvalidRateLimiter();
+        rateLimiter = _rateLimiter;
+        emit RateLimiterSet(_rateLimiter);
+    }
+
+    // Reaches the shared BridgeRateLimiter via a plain external CALL.
+    // rateLimiter == address(0) (not wired yet) behaves like limit == 0: unlimited.
+    function _checkAndUpdateRateLimit(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) private {
+        address limiter = rateLimiter;
+        if (limiter != address(0)) {
+            IBridgeRateLimiter(limiter).checkAndUpdate(transport, remoteId, outbound, amount);
+        }
+    }
+
     // Send tokens via Hyperlane
     function sendTokensViaHyperlane(uint32 _destinationDomain, bytes32 _recipient, uint256 _amount) external payable {
         if (!hyperlaneEnabled) revert HyperlaneNotEnabled();
@@ -90,6 +117,8 @@ contract USNHyperlane is
         if (_recipient == bytes32(0)) revert InvalidRecipient();
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
+
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _destinationDomain, true, _amount);
 
         // Burn tokens first
         _burn(msg.sender, _amount);
@@ -127,9 +156,11 @@ contract USNHyperlane is
     function handle(uint32 _origin, bytes32 _sender, bytes calldata _message) external payable override onlyMailbox {
         if (!hyperlaneEnabled) revert HyperlaneNotEnabled();
 
-        // Verify sender is registered remote token
+        // Verify sender is the registered remote token for this origin. An
+        // unregistered origin reads as bytes32(0), so require a registration
+        // explicitly instead of letting a zero sender match it.
         bytes32 expectedToken = remoteTokens[_origin];
-        if (_sender != expectedToken) revert InvalidRemoteToken();
+        if (expectedToken == bytes32(0) || _sender != expectedToken) revert InvalidRemoteToken();
 
         // Decode message - first 32 bytes for recipient (bytes32), next 32 bytes for amount
         bytes32 recipientBytes32 = bytes32(_message[:32]);
@@ -139,6 +170,8 @@ contract USNHyperlane is
         address recipient = address(uint160(uint256(recipientBytes32)));
 
         if (recipient == address(0)) revert InvalidRecipient();
+
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _origin, false, amount);
 
         _mint(recipient, amount);
 

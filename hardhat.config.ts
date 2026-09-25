@@ -26,23 +26,17 @@ function getWallet() {
 const config: HardhatUserConfig = {
   solidity: {
     eraVersion: '1.0.1',
-    version: process.env.SOLC_VERSION || '0.8.28',
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 100,
-      },
-    },
-
-    /* {
-        version: '0.8.20',
+    compilers: [
+      {
+        version: process.env.SOLC_VERSION || '0.8.28',
         settings: {
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: 100,
           },
         },
-      },*/
+      },
+    ],
   },
   finder: {
     prettify: true,
@@ -191,36 +185,32 @@ const config: HardhatUserConfig = {
       url: process.env.ETHEREUM_MAINNET_RPC_URL || '',
       accounts: getWallet(),
     },
+    base: {
+      url: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+      chainId: 8453,
+      accounts: getWallet(),
+    },
+    tac: {
+      url: process.env.TAC_RPC_URL || 'https://rpc.ankr.com/tac',
+      chainId: 239,
+      accounts: getWallet(),
+    },
   },
 
+  // Etherscan V2 unified API — a single ETHERSCAN_API_KEY works for every
+  // chain hardhat-verify supports natively (Ethereum, Base, Optimism,
+  // Arbitrum, Polygon, BSC, Linea, Blast, Scroll, …). The old per-chain
+  // object was deprecated on 2025-05-31.
+  //
+  // Non-Etherscan explorers (Sophon, zkSync) use their own hardhat plugins
+  // (@matterlabs/hardhat-zksync-verify) that read `verifyURL` from the
+  // network config above, not from here.
+  //
+  // For fully custom explorers (flare/morph/celo blockscout instances),
+  // pass the key inline at verify time:
+  //   ETHERSCAN_API_KEY=<key> npx hardhat verify --network flare ...
   etherscan: {
-    enabled: false,
-    apiKey: {
-      mainnet: process.env.ETHERSCAN_API_KEY || '',
-      arbitrumTestnet: process.env.ARBISCAN_API_KEY || '',
-      auroraTestnet: process.env.AURORA_API_KEY || '',
-      avalancheFujiTestnet: process.env.SNOWTRACE_API_KEY || '',
-      bscTestnet: process.env.BSCSCAN_API_KEY || '',
-      ftmTestnet: process.env.FTMSCAN_API_KEY || '',
-      harmonyTest: process.env.HARMONY_POPS_API_KEY || '',
-      hecoTestnet: process.env.HECOINFO_API_KEY || '',
-      goerli: process.env.GOERLI_ETHERSCAN_API_KEY || '',
-      sepolia: process.env.SEPOLIA_ETHERSCAN_API_KEY || '',
-      moonbaseAlpha: process.env.MOONSCAN_API_KEY || '',
-      polygonMumbai: process.env.POLYGONSCAN_API_KEY || '',
-      sokol: process.env.BLOCKSCOUT_API_KEY || '',
-      custom: process.env.CUSTOM_EXPLORER_API_KEY || '',
-      flare: process.env.FLARE_API_KEY || 'eazzeea',
-      morph: process.env.MORPH_API_KEY || 'eazzeea',
-      celo: process.env.CELO_API_KEY || 'azazz',
-      sophonTestnet: process.env.ETHERSCAN_SOPHON_API_KEY || '',
-      sophon:
-        process.env.ETHERSCAN_SOPHON_API_KEY ||
-        '1TNVYUKMX88WFMWNS5TE3B8SWR2M242AQ9',
-      zksync: 'DP9Z9FWY4K8V264KMBPQWA5A2BY48RYKS7',
-      zksyncmainnet: 'DP9Z9FWY4K8V264KMBPQWA5A2BY48RYKS7',
-      linea: 'B4SBBZSDG1JHTNRCDPXITV1GUQYGK9JP2I',
-    },
+    apiKey: process.env.ETHERSCAN_API_KEY || '',
     customChains: [
       {
         network: 'custom',
