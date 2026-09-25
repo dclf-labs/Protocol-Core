@@ -739,7 +739,11 @@ describe('USNStakingVault', function () {
 
     // User1 sends shares cross-chain to destination using OFT transfer
     const transferAmount = ethers.parseUnits('2000', 18);
-    const executorLzReceiveOptionMaxGas = 65000;
+    // 65 000 (the value zkSync USN/sUSN currently enforce toward mainnet) no
+    // longer covers a fresh-recipient _credit once the rate-limiter hook is in
+    // place (~74k warm / ~91k cold with a limit set). The mock forwards exactly
+    // this much to lzReceive, so keep it at the budget production should use.
+    const executorLzReceiveOptionMaxGas = 150000;
     const options = Options.newOptions()
       .addExecutorLzReceiveOption(BigInt(executorLzReceiveOptionMaxGas), 0)
       .toHex();
@@ -805,7 +809,11 @@ describe('USNStakingVault', function () {
 
     // Send shares cross-chain before rebase
     const transferAmount = ethers.parseUnits('2500', 18);
-    const executorLzReceiveOptionMaxGas = 65000;
+    // 65 000 (the value zkSync USN/sUSN currently enforce toward mainnet) no
+    // longer covers a fresh-recipient _credit once the rate-limiter hook is in
+    // place (~74k warm / ~91k cold with a limit set). The mock forwards exactly
+    // this much to lzReceive, so keep it at the budget production should use.
+    const executorLzReceiveOptionMaxGas = 150000;
     const options = Options.newOptions()
       .addExecutorLzReceiveOption(BigInt(executorLzReceiveOptionMaxGas), 0)
       .toHex();
@@ -1167,7 +1175,11 @@ describe('USNStakingVault', function () {
       await StakingVault.balanceOf(user2.address)
     );
 
-    const executorLzReceiveOptionMaxGas = 65000;
+    // 65 000 (the value zkSync USN/sUSN currently enforce toward mainnet) no
+    // longer covers a fresh-recipient _credit once the rate-limiter hook is in
+    // place (~74k warm / ~91k cold with a limit set). The mock forwards exactly
+    // this much to lzReceive, so keep it at the budget production should use.
+    const executorLzReceiveOptionMaxGas = 150000;
     const options = Options.newOptions()
       .addExecutorLzReceiveOption(BigInt(executorLzReceiveOptionMaxGas), 0)
       .toHex();

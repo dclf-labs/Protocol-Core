@@ -8,9 +8,12 @@ import "../interfaces/IUSNBasicOFTHyperlane.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMailbox.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IInterchainSecurityModule.sol";
 import "@hyperlane-xyz/core/contracts/interfaces/IMessageRecipient.sol";
+import "../interfaces/IBridgeRateLimiter.sol";
 
 contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicOFTHyperlane, IMessageRecipient {
     bytes32 public constant BLACKLIST_MANAGER_ROLE = keccak256("BLACKLIST_MANAGER_ROLE");
+    uint8 internal constant TRANSPORT_LZ = 0;
+    uint8 internal constant TRANSPORT_HYPERLANE = 1;
 
     mapping(address => bool) public blacklist;
 
@@ -19,6 +22,10 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
     IInterchainSecurityModule private _interchainSecurityModule;
     mapping(uint32 => bytes32) public remoteTokens;
     bool public hyperlaneEnabled;
+
+    // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
+    // address(0) means no limiter wired yet: unlimited, same as limit == 0.
+    address public rateLimiter;
 
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
 
@@ -71,6 +78,49 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
         emit RemoteTokenSet(_domain, _remoteToken);
     }
 
+    // ── Rate limiter wiring ──────────────────────────────────────────────────
+
+    // Rate limit config/reset live on the BridgeRateLimiter itself (its owner
+    // calls setRateLimits(address(this), ...) / resetInFlight(address(this), ...)
+    // there directly) — this contract only needs to know which limiter to call.
+    function setRateLimiter(address _rateLimiter) external onlyOwner {
+        if (_rateLimiter != address(0) && _rateLimiter.code.length == 0) revert InvalidRateLimiter();
+        rateLimiter = _rateLimiter;
+        emit RateLimiterSet(_rateLimiter);
+    }
+
+    // Reaches the shared BridgeRateLimiter via a plain external CALL.
+    // rateLimiter == address(0) (not wired yet) behaves like limit == 0: unlimited.
+    function _checkAndUpdateRateLimit(uint8 transport, uint32 remoteId, bool outbound, uint256 amount) private {
+        address limiter = rateLimiter;
+        if (limiter != address(0)) {
+            IBridgeRateLimiter(limiter).checkAndUpdate(transport, remoteId, outbound, amount);
+        }
+    }
+
+    // ── LZ overrides ─────────────────────────────────────────────────────────
+
+    function _debit(
+        uint256 _amountLD,
+        uint256 _minAmountLD,
+        uint32 _dstEid
+    ) internal virtual override returns (uint256 amountSentLD, uint256 amountReceivedLD) {
+        (amountSentLD, amountReceivedLD) = _debitView(_amountLD, _minAmountLD, _dstEid);
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _dstEid, true, amountSentLD);
+        _burn(msg.sender, amountSentLD);
+    }
+
+    function _credit(
+        address _to,
+        uint256 _amountLD,
+        uint32 _srcEid
+    ) internal virtual override returns (uint256 amountReceivedLD) {
+        _checkAndUpdateRateLimit(TRANSPORT_LZ, _srcEid, false, _amountLD);
+        return super._credit(_to, _amountLD, _srcEid);
+    }
+
+    // ── Hyperlane ────────────────────────────────────────────────────────────
+
     // Send tokens via Hyperlane
     function sendTokensViaHyperlane(uint32 _destinationDomain, bytes32 _recipient, uint256 _amount) external payable {
         if (!hyperlaneEnabled) revert HyperlaneNotEnabled();
@@ -78,6 +128,8 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
         if (_recipient == bytes32(0)) revert InvalidRecipient();
         bytes32 remoteToken = remoteTokens[_destinationDomain];
         if (remoteToken == bytes32(0)) revert RemoteTokenNotRegistered();
+
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _destinationDomain, true, _amount);
 
         // Burn tokens first
         _burn(msg.sender, _amount);
@@ -129,6 +181,8 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
         address recipient = address(uint160(uint256(recipientBytes32)));
 
         if (recipient == address(0)) revert InvalidRecipient();
+
+        _checkAndUpdateRateLimit(TRANSPORT_HYPERLANE, _origin, false, amount);
 
         _mint(recipient, amount);
 
