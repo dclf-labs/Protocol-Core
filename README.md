@@ -193,11 +193,13 @@ Upgradeable ERC4626 vault combined with LayerZero OFT for cross-chain sUSN trans
 #### BridgeRateLimiter.sol
 
 Standalone (non-upgradeable) sliding-window rate limiter, deployed once per
-chain and shared by every bridge-enabled contract on that chain (USN, sUSN,
-the staking vault, StakedUSNHyperlane). Each token/vault only holds a
-`rateLimiter` address and calls `IBridgeRateLimiter.checkAndUpdate(...)` via a
-plain external `CALL` — not inheritance — gating both LayerZero and Hyperlane
-send/receive paths from one shared contract instead of four separate copies.
+chain and shared by every bridge-enabled contract on that chain: USN, the
+staking vault, `remote/StakedUSNHyperlane`, `remote/StakedUSNOFTHyperlane`,
+`periphery/USNHyperlane` and `periphery/USNOFTHyperlane`. Each token/vault
+only holds a `rateLimiter` address and calls
+`IBridgeRateLimiter.checkAndUpdate(...)` via a plain external `CALL` — not
+inheritance — gating both LayerZero and Hyperlane send/receive paths from one
+shared contract instead of six separate copies.
 
 Not upgradeable: fixing a bug here means deploying a new `BridgeRateLimiter`
 and repointing every token at it via `setRateLimiter(...)`, not a proxy
@@ -245,6 +247,15 @@ fat-fingered address is caught at config time instead of silently no-op'ing.
   Scan or by calling `EndpointV2.lzReceive(...)` directly with the original
   packet. Don't go looking for a Hyperlane mailbox on an LZ transfer — the
   retry mechanism is per-transport.
+- **Raise the LayerZero `lzReceive` gas before upgrading a receiver.** The
+  rate-limit hook adds ~2k gas to `_credit` unwired and ~10–25k more once a
+  limit is set (a fresh-recipient credit measures ~74k warm / ~91k cold).
+  Routes whose enforced or caller-supplied executor gas is 65 000 — the
+  current `enforcedOptions(30101, SEND)` on zkSync USN/sUSN — will run out of
+  gas at the executor after the upgrade. Set `setEnforcedOptions` (and the
+  front-end `extraOptions` for routes with no enforced value) to ≥ 120 000
+  first; a message that already failed for gas can be re-executed by anyone
+  via `EndpointV2.lzReceive(...)` with more gas.
 - **Monitor for inbound `RateLimitExceeded` reverts.** Nothing in the
   contracts pages anyone automatically. Hyperlane's automatic-but-slow retry
   and LZ's fully-manual retry are both ways a legitimate transfer can sit
