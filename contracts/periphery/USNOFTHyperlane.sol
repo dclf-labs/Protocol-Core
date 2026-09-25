@@ -26,8 +26,6 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
     // Shared BridgeRateLimiter — reached via plain CALL, not inheritance.
     // address(0) means no limiter wired yet: unlimited, same as limit == 0.
     address public rateLimiter;
-    event RateLimiterSet(address indexed rateLimiter);
-    error InvalidRateLimiter();
 
     constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
 
