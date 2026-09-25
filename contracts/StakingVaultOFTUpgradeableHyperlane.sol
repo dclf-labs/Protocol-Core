@@ -219,6 +219,8 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
     function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
         StakingVaultStorage storage s = getStakingVaultStorage();
+        // No delegated redemption, matching withdraw()
+        if (owner != msg.sender) revert Unauthorized();
         if (shares == 0) revert ZeroAmount();
 
         // If user is whitelisted, allow direct redemption
