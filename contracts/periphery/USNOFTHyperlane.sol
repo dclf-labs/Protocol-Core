@@ -27,7 +27,10 @@ contract USNOFTHyperlane is OFTUpgradeable, AccessControlUpgradeable, IUSNBasicO
     // address(0) means no limiter wired yet: unlimited, same as limit == 0.
     address public rateLimiter;
 
-    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __OFT_init(_name, _symbol, _owner);

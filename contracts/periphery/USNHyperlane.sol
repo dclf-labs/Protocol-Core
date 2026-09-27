@@ -37,7 +37,10 @@ contract USNHyperlane is
     // address(0) means no limiter wired yet: unlimited, same as limit == 0.
     address public rateLimiter;
 
-    constructor() {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __Ownable2Step_init();
