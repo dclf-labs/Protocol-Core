@@ -20,9 +20,16 @@ interface IUSNHyperlane {
     error InvalidRecipient();
     error OnlyMailboxAllowed();
 
+    event RateLimiterSet(address indexed rateLimiter);
+    error InvalidRateLimiter();
+
     function blacklistAccount(address account) external;
 
     function unblacklistAccount(address account) external;
 
     function blacklist(address account) external view returns (bool);
+
+    function setRateLimiter(address _rateLimiter) external;
+
+    function rateLimiter() external view returns (address);
 }

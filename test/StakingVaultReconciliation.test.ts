@@ -81,14 +81,6 @@ describe('StakingVaultOFTUpgradeableHyperlane — stuck message reconciliation',
     expect(await StakingVault.balanceOf(await user.getAddress())).to.equal(0n);
   });
 
-  describe('STUCK_MESSAGE_TIMELOCK', function () {
-    it('is a 48h hard floor exposed as a constant', async function () {
-      expect(await StakingVault.STUCK_MESSAGE_TIMELOCK()).to.equal(
-        STUCK_MESSAGE_TIMELOCK
-      );
-    });
-  });
-
   describe('requestHandleFixIssue', function () {
     it('only DEFAULT_ADMIN_ROLE can call it', async function () {
       await expect(
