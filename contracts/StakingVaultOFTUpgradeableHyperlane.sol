@@ -219,6 +219,8 @@ contract StakingVaultOFTUpgradeableHyperlane is
 
     function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
         StakingVaultStorage storage s = getStakingVaultStorage();
+        // No delegated redemption, matching withdraw()
+        if (owner != msg.sender) revert Unauthorized();
         if (shares == 0) revert ZeroAmount();
 
         // If user is whitelisted, allow direct redemption
@@ -351,9 +353,11 @@ contract StakingVaultOFTUpgradeableHyperlane is
     function handle(uint32 _origin, bytes32 _sender, bytes calldata _message) external payable override onlyMailbox {
         if (!hyperlaneEnabled) revert HyperlaneNotEnabled();
 
-        // Verify sender is registered remote token
+        // Verify sender is the registered remote token for this origin. An
+        // unregistered origin reads as bytes32(0), so require a registration
+        // explicitly instead of letting a zero sender match it.
         bytes32 expectedToken = remoteTokens[_origin];
-        if (_sender != expectedToken) revert InvalidRemoteToken();
+        if (expectedToken == bytes32(0) || _sender != expectedToken) revert InvalidRemoteToken();
 
         // Decode message - first 32 bytes for recipient (bytes32), next 32 bytes for amount
         bytes32 recipientBytes32 = bytes32(_message[:32]);

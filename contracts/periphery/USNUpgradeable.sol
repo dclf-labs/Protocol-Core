@@ -28,7 +28,10 @@ contract USNUpgradeable is
 
     error NotWhitelisted(address from, address to);
 
-    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor(address _lzEndpoint) OFTUpgradeable(_lzEndpoint) {
+        _disableInitializers();
+    }
 
     function initialize(string memory name, string memory symbol, address _owner) public initializer {
         __Ownable_init(_owner);

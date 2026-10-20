@@ -37,7 +37,10 @@ contract USNHyperlane is
     // address(0) means no limiter wired yet: unlimited, same as limit == 0.
     address public rateLimiter;
 
-    constructor() {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     function initialize(string memory _name, string memory _symbol, address _owner) public initializer {
         __Ownable2Step_init();
@@ -156,9 +159,11 @@ contract USNHyperlane is
     function handle(uint32 _origin, bytes32 _sender, bytes calldata _message) external payable override onlyMailbox {
         if (!hyperlaneEnabled) revert HyperlaneNotEnabled();
 
-        // Verify sender is registered remote token
+        // Verify sender is the registered remote token for this origin. An
+        // unregistered origin reads as bytes32(0), so require a registration
+        // explicitly instead of letting a zero sender match it.
         bytes32 expectedToken = remoteTokens[_origin];
-        if (_sender != expectedToken) revert InvalidRemoteToken();
+        if (expectedToken == bytes32(0) || _sender != expectedToken) revert InvalidRemoteToken();
 
         // Decode message - first 32 bytes for recipient (bytes32), next 32 bytes for amount
         bytes32 recipientBytes32 = bytes32(_message[:32]);
